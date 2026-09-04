@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>生成扩展图标</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; }
+    canvas { border: 1px solid #ccc; margin: 8px; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>AI对话管理器 - 图标生成器</h1>
+  <p>点击下方按钮下载 4 个尺寸的 PNG 图标，保存到 <code>icons/</code> 目录。</p>
+  <div id="canvases"></div>
+  <button id="download-all">下载全部图标</button>
+  <script>
+    const sizes = [16, 32, 48, 128];
+    const container = document.getElementById('canvases');
+
+    sizes.forEach(size => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      canvas.id = 'icon' + size;
+      container.appendChild(canvas);
+      drawIcon(canvas, size);
+    });
+
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+      const s = size;
+
+      // 背景
+      ctx.fillStyle = '#0078d4';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, s, s, s * 0.18);
+      ctx.fill();
+
+      // 对话气泡
+      ctx.fillStyle = '#ffffff';
+      const bx = s * 0.2, by = s * 0.22, bw = s * 0.6, bh = s * 0.38;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, s * 0.08);
+      ctx.fill();
+
+      // 气泡尾巴
+      ctx.beginPath();
+      ctx.moveTo(bx + s * 0.12, by + bh);
+      ctx.lineTo(bx + s * 0.06, by + bh + s * 0.1);
+      ctx.lineTo(bx + s * 0.22, by + bh);
+      ctx.fill();
+
+      // 文件夹
+      ctx.fillStyle = '#ffd700';
+      ctx.beginPath();
+      ctx.roundRect(s * 0.25, s * 0.62, s * 0.5, s * 0.22, s * 0.04);
+      ctx.fill();
+      ctx.fillStyle = '#e6c200';
+      ctx.fillRect(s * 0.25, s * 0.62, s * 0.2, s * 0.06);
+    }
+
+    document.getElementById('download-all').addEventListener('click', () => {
+      sizes.forEach(size => {
+        const canvas = document.getElementById('icon' + size);
+        const link = document.createElement('a');
+        link.download = 'icon' + size + '.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+      });
+      alert('请将下载的 4 个 PNG 文件放入 icons/ 目录');
+    });
+  </script>
+</body>
+</html>

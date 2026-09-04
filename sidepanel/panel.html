@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI对话管理器</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 列表视图 -->
+    <div id="list-view" class="view active">
+      <header class="header">
+        <div class="search-bar">
+          <input type="search" id="search-input" placeholder="搜索对话..." autocomplete="off">
+        </div>
+        <button id="settings-btn" class="icon-btn" title="设置">⚙️</button>
+      </header>
+
+      <div id="storage-warning" class="storage-warning hidden" role="alert">
+        <div class="storage-warning-title">⚠️ 存储空间即将用尽（A方案）</div>
+        <p id="storage-warning-text" class="storage-warning-text"></p>
+        <button id="storage-warning-settings-btn" class="storage-warning-btn" type="button">前往设置处理</button>
+      </div>
+
+      <div class="platform-tabs" id="platform-tabs">
+        <button class="platform-tab active" data-platform="">全部</button>
+        <button class="platform-tab" data-platform="doubao">豆包</button>
+        <button class="platform-tab" data-platform="qianwen">千问</button>
+        <button class="platform-tab" data-platform="deepseek">DeepSeek</button>
+        <button class="platform-tab" data-platform="yuanbao">元宝</button>
+        <button class="platform-tab" data-platform="kimi">Kimi</button>
+      </div>
+
+      <div class="folders-section" id="folders-section">
+        <div class="section-header">
+          <span>📁 文件夹</span>
+          <div class="section-header-actions">
+            <button id="delete-folder-btn" class="icon-btn small hidden" title="删除当前文件夹">🗑</button>
+            <button id="add-folder-btn" class="icon-btn small" title="新建文件夹">+</button>
+          </div>
+        </div>
+        <div id="folders-list" class="folders-list"></div>
+      </div>
+
+      <div class="conversation-list-wrapper">
+        <div class="list-toolbar">
+          <span class="list-toolbar-label">对话</span>
+          <span id="record-count" class="record-count">共 0 条</span>
+        </div>
+        <div id="conversation-list" class="conversation-list"></div>
+        <div id="empty-state" class="empty-state hidden">
+          <p>暂无保存的对话</p>
+          <p class="hint">在 AI 平台页面点击「保存本轮」</p>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <button id="save-btn" class="footer-btn primary">💾 保存本轮</button>
+        <button id="export-btn" class="footer-btn">📤 导出</button>
+      </footer>
+    </div>
+
+    <!-- 详情视图 -->
+    <div id="detail-view" class="view">
+      <header class="detail-header">
+        <button id="back-btn" class="back-btn">← 返回</button>
+        <button id="favorite-btn" class="icon-btn" title="收藏">☆</button>
+      </header>
+      <div class="detail-meta">
+        <h2 id="detail-title"></h2>
+        <div id="detail-info" class="detail-info"></div>
+        <div id="detail-tags" class="detail-tags"></div>
+      </div>
+      <div id="detail-content" class="detail-content"></div>
+      <footer class="detail-footer">
+        <select id="move-folder-select" class="folder-select" title="移动到文件夹">
+          <option value="">📁 未分类</option>
+        </select>
+        <button id="copy-questions-btn" class="action-btn">复制提问</button>
+        <button id="copy-all-btn" class="action-btn">复制全文</button>
+        <button id="open-url-btn" class="action-btn">原始对话</button>
+        <button id="delete-btn" class="action-btn danger">删除</button>
+      </footer>
+    </div>
+
+    <!-- 设置面板 -->
+    <div id="settings-view" class="view">
+      <header class="settings-page-header">
+        <button id="settings-back-btn" class="back-btn" type="button">← 返回</button>
+        <h1 class="settings-page-title">设置</h1>
+      </header>
+      <div class="settings-content">
+        <!-- 功能设置 -->
+        <section class="settings-card">
+          <h2 class="settings-card-title">功能设置</h2>
+          <label class="toggle-row" for="auto-save-toggle">
+            <span class="toggle-label">自动保存</span>
+            <input type="checkbox" id="auto-save-toggle" class="toggle-input">
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+          <p class="settings-row-hint">对话生成结束后约 1 秒自动保存</p>
+          <div class="settings-divider"></div>
+          <label class="toggle-row" for="auto-classify-toggle">
+            <span class="toggle-label">自动分类</span>
+            <input type="checkbox" id="auto-classify-toggle" class="toggle-input">
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+          <p class="settings-row-hint">开启后，保存时按文件夹名称/关键词匹配标题和内容</p>
+          <div class="settings-divider"></div>
+          <label class="toggle-row" for="theme-toggle">
+            <span class="toggle-label">深色主题</span>
+            <input type="checkbox" id="theme-toggle" class="toggle-input" checked>
+            <span class="toggle-track" aria-hidden="true"></span>
+          </label>
+        </section>
+
+        <!-- 存储方案（可展开） -->
+        <section class="settings-card settings-collapsible">
+          <button type="button" class="settings-section-toggle" id="storage-section-toggle" aria-expanded="false">
+            <span class="settings-section-left">
+              <span class="settings-section-title">存储方案</span>
+              <span id="storage-section-summary" class="settings-section-summary">B · 无上限</span>
+            </span>
+            <span class="settings-chevron" aria-hidden="true">▶</span>
+          </button>
+          <div class="settings-section-body collapsed" id="storage-section-body">
+            <div class="storage-mode-list">
+              <label class="storage-mode-card">
+                <input type="radio" name="storage-mode" value="limited">
+                <span class="storage-mode-card-inner">
+                  <span class="storage-mode-check" aria-hidden="true">✓</span>
+                  <span class="storage-mode-title">A · 10 MB 上限</span>
+                  <span class="storage-mode-desc">接近上限时提醒，超出后禁止保存</span>
+                </span>
+              </label>
+              <label class="storage-mode-card">
+                <input type="radio" name="storage-mode" value="unlimited" checked>
+                <span class="storage-mode-card-inner">
+                  <span class="storage-mode-check" aria-hidden="true">✓</span>
+                  <span class="storage-mode-title">B · 无上限</span>
+                  <span class="storage-mode-desc">适合大量保存，仅显示已用空间</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="settings-subsection">
+              <div class="storage-usage-panel">
+                <div class="storage-usage-head">
+                  <span id="storage-usage-amount" class="storage-usage-title">-</span>
+                  <span id="storage-usage-meta" class="storage-usage-meta">充足 / 无上限</span>
+                </div>
+                <p id="storage-usage-note" class="storage-usage-desc">数据保存在本机，建议定期导出 JSON 备份</p>
+
+                <div id="storage-progress-wrap" class="storage-usage-progress hidden">
+                  <div class="storage-progress-bar">
+                    <div id="storage-progress-fill" class="storage-progress-fill"></div>
+                  </div>
+                </div>
+
+                <p id="storage-tip-limited" class="storage-usage-desc storage-usage-tip-warn hidden"></p>
+              </div>
+              <!-- 兼容旧逻辑：隐藏占位 -->
+              <span id="storage-usage" class="hidden" aria-hidden="true">-</span>
+              <span id="storage-percent" class="hidden" aria-hidden="true">0%</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 数据管理（可展开） -->
+        <section class="settings-card settings-collapsible">
+          <button type="button" class="settings-section-toggle" id="data-section-toggle" aria-expanded="false">
+            <span class="settings-section-left">
+              <span class="settings-section-title">数据管理</span>
+              <span class="settings-section-summary">导出 / 导入备份</span>
+            </span>
+            <span class="settings-chevron" aria-hidden="true">▶</span>
+          </button>
+          <div class="settings-section-body collapsed" id="data-section-body">
+            <div class="data-actions">
+              <button id="export-json-btn" class="data-action-export" type="button">
+                <span class="data-action-icon" aria-hidden="true">↓</span>
+                <span class="data-action-copy">
+                  <span class="data-action-title">导出 JSON 备份</span>
+                  <span class="data-action-desc">保存全部对话到电脑</span>
+                </span>
+              </button>
+
+              <div class="data-import-grid">
+                <input type="file" id="import-json-input" accept=".json,application/json" hidden>
+                <button id="import-json-merge-btn" class="data-import-card" type="button">
+                  <span class="data-import-icon" aria-hidden="true">↑</span>
+                  <span class="data-import-copy">
+                    <span class="data-import-title">合并导入</span>
+                    <span class="data-import-desc">追加到现有</span>
+                  </span>
+                </button>
+                <button id="import-json-replace-btn" class="data-import-card data-import-card-danger" type="button">
+                  <span class="data-import-icon" aria-hidden="true">⚠</span>
+                  <span class="data-import-copy">
+                    <span class="data-import-title">替换导入</span>
+                    <span class="data-import-desc">覆盖现有数据</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- 自定义对话框 -->
+    <div id="dialog-overlay" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-card">
+        <h3 id="dialog-title" class="dialog-title"></h3>
+        <p id="dialog-message" class="dialog-message"></p>
+        <input id="dialog-input" class="dialog-input hidden" type="text" autocomplete="off">
+        <div class="dialog-actions">
+          <button id="dialog-cancel" class="dialog-btn dialog-btn-secondary" type="button">取消</button>
+          <button id="dialog-confirm" class="dialog-btn dialog-btn-primary" type="button">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# secrets / local env
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# build / packages
+dist/
+build/
+*.zip
+*.crx
+
+# local backups / exports
+*.backup.json
+/backups/

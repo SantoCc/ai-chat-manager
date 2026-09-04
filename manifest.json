@@ -1,0 +1,155 @@
+{
+  "manifest_version": 3,
+  "name": "AI对话管理器",
+  "version": "0.1.35",
+  "description": "一键保存、整理、搜索、复用豆包/通义千问/DeepSeek/元宝/Kimi的AI对话记录",
+  "permissions": ["storage", "unlimitedStorage", "activeTab", "sidePanel", "downloads", "clipboardWrite", "scripting", "tabs"],
+  "host_permissions": [
+    "*://*.doubao.com/*",
+    "*://doubao.com/*",
+    "*://tongyi.aliyun.com/*",
+    "*://*.tongyi.com/*",
+    "*://*.qianwen.com/*",
+    "*://qianwen.com/*",
+    "*://qianwen.aliyun.com/*",
+    "*://chat.deepseek.com/*",
+    "*://yuanbao.tencent.com/*",
+    "*://*.yuanbao.tencent.com/*",
+    "*://kimi.moonshot.cn/*",
+    "*://*.kimi.moonshot.cn/*",
+    "*://kimi.com/*",
+    "*://*.kimi.com/*",
+    "*://www.kimi.com/*"
+  ],
+  "action": {
+    "default_title": "打开AI对话管理器"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.doubao.com/*",
+        "*://doubao.com/*",
+        "*://www.doubao.com/*"
+      ],
+      "js": [
+        "utils/helpers.js",
+        "utils/dom.js",
+        "content/doubao-api.js",
+        "content/adapters/base.js",
+        "content/adapters/doubao.js",
+        "content/content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.doubao.com/*",
+        "*://doubao.com/*",
+        "*://www.doubao.com/*"
+      ],
+      "js": ["content/inject/doubao-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://tongyi.aliyun.com/qianwen*",
+        "*://*.tongyi.com/qianwen*",
+        "*://www.tongyi.com/*",
+        "*://chat2.qianwen.com/*",
+        "*://www.qianwen.com/*",
+        "*://qianwen.com/*",
+        "*://*.qianwen.com/*",
+        "*://qianwen.aliyun.com/*"
+      ],
+      "js": [
+        "utils/helpers.js",
+        "utils/dom.js",
+        "content/qianwen-api.js",
+        "content/adapters/base.js",
+        "content/adapters/qianwen.js",
+        "content/content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://chat.deepseek.com/*"],
+      "js": [
+        "utils/helpers.js",
+        "utils/dom.js",
+        "content/deepseek-api.js",
+        "content/adapters/base.js",
+        "content/adapters/deepseek.js",
+        "content/content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://yuanbao.tencent.com/*",
+        "*://*.yuanbao.tencent.com/*"
+      ],
+      "js": [
+        "utils/helpers.js",
+        "utils/dom.js",
+        "content/yuanbao-api.js",
+        "content/adapters/base.js",
+        "content/adapters/yuanbao.js",
+        "content/content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://yuanbao.tencent.com/*",
+        "*://*.yuanbao.tencent.com/*"
+      ],
+      "js": ["content/inject/yuanbao-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://kimi.moonshot.cn/*",
+        "*://*.kimi.moonshot.cn/*",
+        "*://kimi.com/*",
+        "*://*.kimi.com/*",
+        "*://www.kimi.com/*"
+      ],
+      "js": [
+        "utils/helpers.js",
+        "utils/dom.js",
+        "content/kimi-api.js",
+        "content/adapters/base.js",
+        "content/adapters/kimi.js",
+        "content/content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://kimi.moonshot.cn/*",
+        "*://*.kimi.moonshot.cn/*",
+        "*://kimi.com/*",
+        "*://*.kimi.com/*",
+        "*://www.kimi.com/*"
+      ],
+      "js": ["content/inject/kimi-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
