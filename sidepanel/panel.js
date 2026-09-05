@@ -1,8 +1,8 @@
 /**
  * 侧边栏主逻辑
  */
-import { renderMarkdown, highlightSearchText, getSearchSnippet } from '../lib/markdown.js?v=0.1.43';
-import { parseSearchQuery } from '../lib/search-query.js?v=0.1.43';
+import { renderMarkdown, highlightSearchText, getSearchSnippet } from '../lib/markdown.js?v=0.1.0';
+import { parseSearchQuery } from '../lib/search-query.js?v=0.1.0';
 import { formatDate, getPlatformLabel, getUserMessages, copyText, truncateFolderName, repairMessageRoles, dedupeMessages } from '../utils/helpers-export.js';
 import { conversationToMarkdown } from '../lib/export.js';
 import { showConfirm, showPrompt } from './dialog.js';
