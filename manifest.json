@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI对话管理器",
-  "version": "0.1.35",
+  "version": "0.1.43",
   "description": "一键保存、整理、搜索、复用豆包/通义千问/DeepSeek/元宝/Kimi的AI对话记录",
   "permissions": ["storage", "unlimitedStorage", "activeTab", "sidePanel", "downloads", "clipboardWrite", "scripting", "tabs"],
   "host_permissions": [
@@ -86,6 +86,27 @@
         "content/content.js"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["*://chat.deepseek.com/*"],
+      "js": ["content/inject/deepseek-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "*://tongyi.aliyun.com/qianwen*",
+        "*://*.tongyi.com/qianwen*",
+        "*://www.tongyi.com/*",
+        "*://chat2.qianwen.com/*",
+        "*://www.qianwen.com/*",
+        "*://qianwen.com/*",
+        "*://*.qianwen.com/*",
+        "*://qianwen.aliyun.com/*"
+      ],
+      "js": ["content/inject/qianwen-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     },
     {
       "matches": [

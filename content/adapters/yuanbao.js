@@ -93,6 +93,7 @@ class YuanbaoAdapter extends BaseAdapter {
       const apiData = await fetchYuanbaoConversation(conversationId);
       if (apiData?.messages?.length) {
         console.log('[ACM Yuanbao] API 原文', apiData.messages.length, '条');
+        apiData.messages = this._enrichMessagesWithDomImages(apiData.messages);
         const result = this._buildResult(apiData.messages, apiData.title || null, {
           source: 'api',
           sessionId: apiData.sessionId || conversationId
@@ -269,6 +270,104 @@ class YuanbaoAdapter extends BaseAdapter {
       this._autoSaveInFlight = false;
       this._allowFetchWhileSettling = false;
     }
+  }
+
+  /** API 漏图时，从页面大图补一张 ACM_FILE 卡到对应助手消息 */
+  _enrichMessagesWithDomImages(messages) {
+    if (!Array.isArray(messages) || !messages.length) return messages;
+    const dropEmpty = (text) =>
+      typeof dropEmptyImagePlaceholdersIfReal === 'function'
+        ? dropEmptyImagePlaceholdersIfReal(text)
+        : String(text || '');
+    const needIdx = [];
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m?.role !== 'assistant') continue;
+      const c = String(m.content || '');
+      if (/"type":"image"/.test(c) && /"url":"https?:/.test(c)) continue;
+      if (/!\[[^\]]*\]\(https?:/.test(c)) continue;
+      if (
+        /画好了|生成了一?张|已为你生成|绘制|文生图|生图/i.test(c) ||
+        /"type":"image"/.test(c)
+      ) {
+        needIdx.push(i);
+      }
+    }
+    if (!needIdx.length) {
+      return messages.map((m) =>
+        m?.role === 'assistant' ? { ...m, content: dropEmpty(m.content) } : m
+      );
+    }
+
+    const pageImgs = Array.from(document.querySelectorAll('img'))
+      .map((img) => {
+        const src = String(img.currentSrc || img.src || '').trim();
+        if (!src || !/^https?:/i.test(src)) return null;
+        if (/avatar|icon|logo|emoji|sprite|favicon|qrcode|badge/i.test(src)) return null;
+        const w = img.naturalWidth || img.width || 0;
+        const h = img.naturalHeight || img.height || 0;
+        if (w > 0 && h > 0 && (w < 120 || h < 120)) return null;
+        const rect = img.getBoundingClientRect();
+        const area = Math.max(w * h, (rect.width || 0) * (rect.height || 0));
+        return { src, area };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.area - a.area);
+
+    const used = new Set();
+    return messages.map((m, i) => {
+      if (m?.role !== 'assistant') return m;
+      let c = String(m.content || '');
+      if (!needIdx.includes(i)) return { ...m, content: dropEmpty(c) };
+      if (/"url":"https?:/.test(c) && /"type":"image"/.test(c)) {
+        return { ...m, content: dropEmpty(c) };
+      }
+      const hit = pageImgs.find((p) => !used.has(p.src));
+      if (!hit) {
+        // 已有占位卡就不再叠第二张
+        if (/"type":"image"/.test(c)) return { ...m, content: c };
+        const card =
+          typeof formatGeneratedFileCardsMarkdown === 'function'
+            ? formatGeneratedFileCardsMarkdown([
+                { kind: 'file', type: 'image', title: '图片', generatedAt: '', url: '' }
+              ])
+            : '';
+        return card ? { ...m, content: `${c}\n\n${card}`.trim() } : m;
+      }
+      used.add(hit.src);
+      // 用真 URL 替换空占位卡，而不是再追加一张
+      if (/@@ACM_FILE:\{[^}]*"type":"image"[^}]*\}@@/.test(c)) {
+        c = c.replace(/@@ACM_FILE:(\{[\s\S]*?\})@@/g, (full, json) => {
+          try {
+            const meta = JSON.parse(json);
+            if (/image/i.test(meta?.type || '') && !String(meta?.url || '').trim()) {
+              meta.url = hit.src;
+              meta.title = meta.title || '图片';
+              return typeof formatGeneratedFileCardsMarkdown === 'function'
+                ? formatGeneratedFileCardsMarkdown([meta])
+                : `@@ACM_FILE:${JSON.stringify(meta)}@@`;
+            }
+          } catch {
+            // keep
+          }
+          return full;
+        });
+        return { ...m, content: dropEmpty(c) };
+      }
+      const card = {
+        kind: 'file',
+        type: 'image',
+        title: '图片',
+        generatedAt: '',
+        url: hit.src
+      };
+      if (typeof mergeFileCardsIntoContent === 'function') {
+        c = mergeFileCardsIntoContent(c, [card]);
+      } else if (typeof formatGeneratedFileCardsMarkdown === 'function') {
+        c = `${c}\n\n${formatGeneratedFileCardsMarkdown([card])}`.trim();
+      }
+      return { ...m, content: dropEmpty(c) };
+    });
   }
 
   _getObserveTarget() {

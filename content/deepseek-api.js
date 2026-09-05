@@ -647,14 +647,8 @@ function injectDeepSeekHook() {
   };
 })();`;
 
-  try {
-    const el = document.createElement('script');
-    el.textContent = source;
-    (document.documentElement || document.head || document.body).appendChild(el);
-    el.remove();
-  } catch (err) {
-    console.warn('[ACM DeepSeek] hook 注入失败', err);
-  }
+  // 禁止内联 script（会触发站点 CSP 红字）。页面 hook 仅由 manifest world:MAIN 注入。
+  void source;
 }
 
 setupDeepSeekCacheListener();

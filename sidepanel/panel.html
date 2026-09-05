@@ -50,8 +50,29 @@
         </div>
         <div id="conversation-list" class="conversation-list"></div>
         <div id="empty-state" class="empty-state hidden">
-          <p>暂无保存的对话</p>
-          <p class="hint">在 AI 平台页面点击「保存本轮」</p>
+          <div class="empty-icon" aria-hidden="true">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <rect x="8" y="6" width="24" height="28" rx="4" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M14 14h12M14 20h12M14 26h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <p class="empty-title">暂无保存的对话</p>
+          <div class="empty-guide">
+            <div class="empty-guide-item">
+              <span class="empty-num">1</span>
+              <div class="empty-guide-text">
+                <strong>首次使用或重载扩展，请手动保存</strong>
+                <span>刷新 AI 页面，或点击「保存本轮」</span>
+              </div>
+            </div>
+            <div class="empty-guide-item">
+              <span class="empty-num">2</span>
+              <div class="empty-guide-text">
+                <strong>想少点操作？</strong>
+                <span>可在设置中开启「自动保存」</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -150,7 +171,7 @@
                   <span id="storage-usage-amount" class="storage-usage-title">-</span>
                   <span id="storage-usage-meta" class="storage-usage-meta">充足 / 无上限</span>
                 </div>
-                <p id="storage-usage-note" class="storage-usage-desc">数据保存在本机，建议定期导出 JSON 备份</p>
+                <p id="storage-usage-note" class="storage-usage-desc">数据保存在本机。点「移除」扩展会清空全部对话，请定期导出 JSON 备份</p>
 
                 <div id="storage-progress-wrap" class="storage-usage-progress hidden">
                   <div class="storage-progress-bar">
@@ -177,6 +198,13 @@
             <span class="settings-chevron" aria-hidden="true">▶</span>
           </button>
           <div class="settings-section-body collapsed" id="data-section-body">
+            <div class="uninstall-warn" role="note">
+              <div class="uninstall-warn-title">移除扩展前请先备份</div>
+              <p class="uninstall-warn-desc">
+                在 <code>edge://extensions/</code> 点「移除」会清空全部本地对话，请先导出 JSON备份。
+              </p>
+              <button id="export-json-warn-btn" class="uninstall-warn-btn" type="button">立即导出 JSON 备份</button>
+            </div>
             <div class="data-actions">
               <button id="export-json-btn" class="data-action-export" type="button">
                 <span class="data-action-icon" aria-hidden="true">↓</span>
@@ -226,6 +254,6 @@
     </div>
   </div>
 
-  <script type="module" src="panel.js"></script>
+  <script type="module" src="panel.js?v=0.1.43"></script>
 </body>
 </html>

@@ -85,12 +85,42 @@ function normalizeKimiRole(raw) {
   return null;
 }
 
-function extractKimiBlocksText(blocks) {
+function extractKimiBlocksText(blocks, role = null) {
   if (!Array.isArray(blocks)) return '';
   const parts = [];
   for (const block of blocks) {
     if (!block || typeof block !== 'object') continue;
     if (block.think) continue;
+    const type = String(block.type || block.block_type || '').toLowerCase();
+
+    // 代码块 → markdown fence（须在通用 content 提取前判断）
+    if (
+      role !== 'user' &&
+      (type === 'code' ||
+        type === 'code_block' ||
+        type === 'sandbox' ||
+        type === 'file_code' ||
+        block.code ||
+        ((block.language != null || block.lang != null) &&
+          (block.content || block.text || block.value)))
+    ) {
+      const lang = String(block.language || block.lang || block.code?.language || '').trim();
+      const code = String(
+        block.code?.content ||
+          block.code?.text ||
+          (typeof block.code === 'string' ? block.code : '') ||
+          block.content ||
+          block.text?.content ||
+          block.text ||
+          block.value ||
+          ''
+      ).trim();
+      if (code && !/^https?:/i.test(code) && code.length > 2) {
+        parts.push('```' + lang + '\n' + code + '\n```');
+        continue;
+      }
+    }
+
     if (block.text?.content) {
       parts.push(String(block.text.content).trim());
       continue;
@@ -103,20 +133,202 @@ function extractKimiBlocksText(blocks) {
       parts.push(block.text.trim());
       continue;
     }
-    const type = String(block.type || '').toLowerCase();
-    if (type === 'text' && (block.msg || block.value)) {
+    if ((type === 'text' || type === 'markdown' || type === 'md') && (block.msg || block.value)) {
       parts.push(String(block.msg || block.value).trim());
+      continue;
+    }
+    // 图片块：仅助手消息落卡，用户消息忽略媒体
+    if (role === 'user') continue;
+    const url =
+      block.url ||
+      block.src ||
+      block.image_url ||
+      block.imageUrl ||
+      (typeof block.image === 'string' ? block.image : block.image?.url);
+    if (
+      url &&
+      /^https?:/i.test(String(url)) &&
+      (/image|img|media|picture/i.test(type) || /\.(png|jpe?g|gif|webp)/i.test(url))
+    ) {
+      const title = block.title || block.alt || block.name || '图片';
+      if (typeof formatGeneratedFileCardsMarkdown === 'function') {
+        parts.push(
+          formatGeneratedFileCardsMarkdown([
+            { kind: 'file', type: 'image', title, generatedAt: '', url: String(url) }
+          ])
+        );
+      } else {
+        parts.push(`![${title}](${url})`);
+      }
     }
   }
   return parts.filter(Boolean).join('\n\n').trim();
 }
 
-function extractKimiMessageContent(raw) {
+/** 从消息/载荷里收集图片 URL（含 image_search 结果） */
+function collectKimiImageEntries(root) {
+  const out = [];
+  const seen = new Set();
+  const push = (url, title, ref) => {
+    const u = String(url || '').trim();
+    if (!u || !/^https?:/i.test(u)) return;
+    if (/avatar|icon|logo|emoji|favicon|sprite|loading\.|placeholder/i.test(u)) return;
+    if (
+      !/\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(u) &&
+      !/\/image|img|cdn|zimgs|moonshot|kimi-web|mshcdn|byteimg/i.test(u)
+    ) {
+      return;
+    }
+    if (seen.has(u)) return;
+    seen.add(u);
+    out.push({
+      url: u,
+      title: String(title || '图片').slice(0, 80),
+      ref: ref ? String(ref) : ''
+    });
+  };
+  const walk = (node, depth) => {
+    if (!node || depth > 14) return;
+    if (typeof node === 'string') {
+      if (/^https?:\/\//i.test(node)) push(node, '图片', '');
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((n) => walk(n, depth + 1));
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const ref =
+      node.ref ||
+      node.cite ||
+      node.image_id ||
+      node.imageId ||
+      node.id ||
+      node.key ||
+      '';
+    const url =
+      node.url ||
+      node.src ||
+      node.image_url ||
+      node.imageUrl ||
+      node.thumbnail ||
+      node.thumb_url ||
+      node.origin_url ||
+      node.originUrl ||
+      (typeof node.image === 'string' ? node.image : node.image?.url);
+    const title = node.title || node.alt || node.name || node.desc || '';
+    if (url) {
+      const refStr = String(ref || '');
+      if (/image_search:\d+#\d+/i.test(refStr)) push(url, title, refStr);
+      else push(url, title, /image_search/i.test(refStr) ? refStr : '');
+    }
+    for (const [k, v] of Object.entries(node)) {
+      if (/think|thinking|password|token|authorization/i.test(k)) continue;
+      walk(v, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
+function formatKimiImageCards(entries) {
+  if (!entries?.length) return '';
+  const cards = entries.map((e) => ({
+    kind: 'file',
+    type: 'image',
+    title: e.title || '图片',
+    generatedAt: '',
+    url: e.url || ''
+  }));
+  if (typeof formatGeneratedFileCardsMarkdown === 'function') {
+    return formatGeneratedFileCardsMarkdown(cards);
+  }
+  return cards.map((c) => (c.url ? `![${c.title}](${c.url})` : '')).filter(Boolean).join('\n\n');
+}
+
+/**
+ * 把 Kimi 正文里的 image_search 占位符替换成图片卡
+ * 例：image🛠image_search:1#0🛠image_search:1#1
+ */
+function resolveKimiImageMarkers(text, imageEntries) {
+  let s = String(text || '');
+  if (!s) return '';
+  const entries = Array.isArray(imageEntries) ? imageEntries : [];
+  const byRef = new Map();
+  for (const e of entries) {
+    if (e.ref && /image_search:\d+#\d+/i.test(e.ref)) {
+      byRef.set(e.ref.toLowerCase(), e);
+    }
+  }
+  const ordered = entries.filter((e) => e.url);
+
+  const markerRe =
+    /(?:[\uE000-\uF8FF]\s*)?(?:\[\s*\])?\s*image\s*(?:🛠️|🛠|\u{1F6E0}\uFE0F?)\s*((?:image_search:\d+#\d+\s*(?:🛠️|🛠|\u{1F6E0}\uFE0F?)?\s*)+)(?:[\uE000-\uF8FF]\s*)?(?:\[\s*\])?/giu;
+
+  const replaceRefs = (refsPart) => {
+    const refs = [...String(refsPart || '').matchAll(/image_search:(\d+)#(\d+)/gi)];
+    if (!refs.length) return '';
+    const picked = [];
+    const usedUrl = new Set();
+    for (const m of refs) {
+      const key = m[0].toLowerCase();
+      let hit = byRef.get(key);
+      if (!hit) {
+        const idx = Number(m[2]);
+        hit = ordered[idx] || ordered[picked.length];
+      }
+      if (hit?.url && !usedUrl.has(hit.url)) {
+        usedUrl.add(hit.url);
+        picked.push(hit);
+      }
+    }
+    if (!picked.length && ordered.length) {
+      // 按出现数量取前 N 张
+      for (const e of ordered.slice(0, Math.min(refs.length, 8))) {
+        if (!usedUrl.has(e.url)) {
+          usedUrl.add(e.url);
+          picked.push(e);
+        }
+      }
+    }
+    if (!picked.length) {
+      // 去掉标记，不落空占位（避免与后续真图卡重复）
+      return '';
+    }
+    return formatKimiImageCards(picked);
+  };
+
+  if (markerRe.test(s)) {
+    markerRe.lastIndex = 0;
+    s = s.replace(markerRe, (_, refsPart) => `\n\n${replaceRefs(refsPart)}\n\n`);
+  } else if (/image_search:\d+#\d+/i.test(s)) {
+    // 宽松兜底：整段引用串
+    s = s.replace(
+      /(?:\[\s*\])?\s*image\s*(?:🛠️|🛠)?\s*((?:image_search:\d+#\d+\s*(?:🛠️|🛠)?\s*)+)/gi,
+      (_, refsPart) => `\n\n${replaceRefs(refsPart)}\n\n`
+    );
+    s = s.replace(/(?:🛠️|🛠)?\s*image_search:\d+#\d+/gi, '');
+  }
+
+  // 清掉残留特殊符号 / 空 []
+  s = s.replace(/[\uE000-\uF8FF]/g, '');
+  s = s.replace(/\[\s*\]/g, '');
+  s = s.replace(/(?:🛠️|🛠){2,}/g, '');
+  if (typeof promoteFilenameLinesToFileCards === 'function') {
+    s = promoteFilenameLinesToFileCards(s);
+  }
+  if (typeof dedupeAcmFileCardsInText === 'function') {
+    s = dedupeAcmFileCardsInText(s);
+  }
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function extractKimiMessageContent(raw, imageEntries = null, role = null) {
   if (!raw || typeof raw !== 'object') return '';
   let content =
-    extractKimiBlocksText(raw.blocks) ||
-    extractKimiBlocksText(raw.contents) ||
-    extractKimiBlocksText(raw.content_blocks);
+    extractKimiBlocksText(raw.blocks, role) ||
+    extractKimiBlocksText(raw.contents, role) ||
+    extractKimiBlocksText(raw.content_blocks, role);
 
   if (!content && typeof raw.content === 'string') content = raw.content.trim();
   if (!content && typeof raw.text === 'string') content = raw.text.trim();
@@ -131,7 +343,47 @@ function extractKimiMessageContent(raw) {
       .join('\n\n')
       .trim();
   }
+
+  // 用户提问：绝不挂图片卡（「生成一张…图片」会被误匹配）
+  if (role === 'user') {
+    return stripKimiUserMediaLeak(content);
+  }
+
+  const imgs = imageEntries || collectKimiImageEntries(raw);
+  const hadMarkers = /image_search:\d+#\d+/i.test(content);
+  content = resolveKimiImageMarkers(content, imgs);
+
+  // 仅助手 + 明确搜图/上图语境才补卡；禁止仅因含「图片」二字就灌图
+  if (
+    imgs.length &&
+    !/"type":"image"/.test(content) &&
+    !/!\[[^\]]*\]\(https?:/.test(content) &&
+    (hadMarkers || /为你找到了|上图包括|找到了多张图片/i.test(content))
+  ) {
+    const block = formatKimiImageCards(imgs.slice(0, 8));
+    if (block) content = `${content}\n\n${block}`.trim();
+  }
   return content;
+}
+
+/** 去掉误挂到用户消息上的图片卡 / 搜图标记 */
+function stripKimiUserMediaLeak(text) {
+  let s = String(text || '');
+  if (!s) return '';
+  s = s.replace(
+    /@@ACM_FILE:(\{[\s\S]*?\})@@(?:\n(?:📎[^\n]*|生成时间：[^\n]*|（交互式文件[^\n]*）))*/g,
+    ''
+  );
+  s = s.replace(/!\[[^\]]*\]\(https?:[^)]+\)/g, '');
+  s = s.replace(
+    /(?:[\uE000-\uF8FF]\s*)?(?:\[\s*\])?\s*image\s*(?:🛠️|🛠|\u{1F6E0}\uFE0F?)[\s\S]{0,400}?(?:[\uE000-\uF8FF]\s*)?(?:\[\s*\])?/giu,
+    ''
+  );
+  s = s.replace(/(?:🛠️|🛠)?\s*image_search:\d+#\d+/gi, '');
+  s = s.replace(/(?:🛠️|🛠)/g, '');
+  s = s.replace(/[\uE000-\uF8FF]/g, '');
+  s = s.replace(/\[\s*\]/g, '');
+  return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function collectKimiMessageArrays(payload) {
@@ -154,6 +406,7 @@ function collectKimiMessageArrays(payload) {
 
 function parseKimiHistoryPayload(payload) {
   const raw = collectKimiMessageArrays(payload);
+  const globalImages = collectKimiImageEntries(payload);
   const messages = [];
   for (const m of raw) {
     if (!m || typeof m !== 'object') continue;
@@ -163,7 +416,45 @@ function parseKimiHistoryPayload(payload) {
       normalizeKimiRole(m.sender) ||
       normalizeKimiRole(m.type);
     if (!role) continue;
-    let content = extractKimiMessageContent(m);
+
+    let content;
+    if (role === 'user') {
+      content = extractKimiMessageContent(m, null, 'user');
+    } else {
+      const localImages = collectKimiImageEntries(m);
+      // 先取纯文本看本条引用了哪些 image_search
+      const peek =
+        extractKimiBlocksText(m.blocks, 'user') ||
+        (typeof m.content === 'string' ? m.content : '') ||
+        (typeof m.text === 'string' ? m.text : '');
+      const refs = new Set(
+        [...String(peek).matchAll(/image_search:\d+#\d+/gi)].map((x) => x[0].toLowerCase())
+      );
+      const mergedImages = [...localImages];
+      const seen = new Set(localImages.map((x) => x.url).filter(Boolean));
+      // 只用「本条引用到的」全局图，禁止整会话灌进每一轮
+      for (const g of globalImages) {
+        if (!g.url || seen.has(g.url)) continue;
+        if (g.ref && refs.has(String(g.ref).toLowerCase())) {
+          seen.add(g.url);
+          mergedImages.push(g);
+        }
+      }
+      // 本条有引用但本地无 URL：按 #index 从全局有序列表补（仍限制数量）
+      if (refs.size && !mergedImages.some((x) => x.url)) {
+        const ordered = globalImages.filter((x) => x.url);
+        for (const ref of refs) {
+          const mIdx = /#(\d+)$/.exec(ref);
+          const idx = mIdx ? Number(mIdx[1]) : mergedImages.length;
+          const hit = ordered[idx] || ordered[mergedImages.length];
+          if (hit?.url && !seen.has(hit.url)) {
+            seen.add(hit.url);
+            mergedImages.push({ ...hit, ref });
+          }
+        }
+      }
+      content = extractKimiMessageContent(m, mergedImages, 'assistant');
+    }
     if (!content) continue;
     if (role === 'assistant' && typeof sanitizeAssistantContentForSave === 'function') {
       content = sanitizeAssistantContentForSave(content);
@@ -501,18 +792,14 @@ function injectKimiHook() {
   };
 })();`;
 
-  try {
-    const el = document.createElement('script');
-    el.textContent = source;
-    (document.documentElement || document.head || document.body).appendChild(el);
-    el.remove();
-  } catch (err) {
-    console.warn('[ACM Kimi] hook 注入失败', err);
-  }
+  // 禁止内联 script（会触发站点 CSP 红字）。页面 hook 仅由 manifest world:MAIN 注入。
+  void source;
 }
 
 if (typeof globalThis !== 'undefined') {
   globalThis.getKimiChatId = getKimiChatId;
   globalThis.fetchKimiConversation = fetchKimiConversation;
   globalThis.injectKimiHook = injectKimiHook;
+  globalThis.resolveKimiImageMarkers = resolveKimiImageMarkers;
+  globalThis.stripKimiUserMediaLeak = stripKimiUserMediaLeak;
 }

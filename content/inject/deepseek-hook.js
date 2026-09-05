@@ -1,6 +1,6 @@
 /**
  * 注入页面主环境：仅拦截 history_messages + 代发页面 fetch（不碰聊天流）
- * 实际注入由 content/deepseek-api.js 内联完成；本文件保留作对照。
+ * 由 manifest content_scripts world:MAIN 注入；勿再内联 script（会触发站点 CSP）
  */
 (function () {
   if (window.__acmDeepSeekHooked) return;
@@ -95,20 +95,26 @@
     }
   });
 
-  window.fetch = async function (...args) {
-    const res = await origFetch.apply(this, args);
-    try {
-      const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
-      if (isHistoryUrl(url)) {
+  // 仅包装 history 请求；其它 fetch 原样转发，避免站点埋点/DNS 失败红字挂到本文件
+  window.fetch = function (...args) {
+    const input = args[0];
+    const url = typeof input === 'string' ? input : input && input.url;
+    if (!isHistoryUrl(url)) {
+      return origFetch.apply(this, args);
+    }
+    return origFetch.apply(this, args).then((res) => {
+      try {
         res
           .clone()
           .json()
           .then((data) => publishHistory(extractSessionId(url), data))
           .catch(() => {});
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
-    return res;
+      return res;
+    });
   };
+
+  // 不再包装 XHR：DeepSeek 埋点等会走 XHR，包装后失败红字会误标为 deepseek-hook.js
 })();

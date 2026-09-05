@@ -113,6 +113,15 @@ class BaseAdapter {
             }
 
             if (data?.error || !data?.messages?.length) return;
+            // 自动保存需至少一对有效问答，避免「新对话」空页写入「未命名对话」
+            const hasUser = data.messages.some(
+              (m) => m.role === 'user' && String(m.content || '').replace(/\s+/g, '').length > 0
+            );
+            const hasAssistant = data.messages.some(
+              (m) =>
+                m.role === 'assistant' && String(m.content || '').replace(/\s+/g, '').length > 0
+            );
+            if (!hasUser || !hasAssistant) return;
             this._updateCallback(data);
           } catch (e) {
             const msg = e?.message || '';

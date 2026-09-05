@@ -146,6 +146,52 @@ function unwrapYuanbaoDetail(payload) {
   return null;
 }
 
+function resolveYuanbaoMediaUrl(item) {
+  if (!item || typeof item !== 'object') return '';
+  const candidates = [
+    item.url,
+    item.fileUrl,
+    item.downloadUrl,
+    item.src,
+    item.imageUrl,
+    item.image_url,
+    item.cdnUrl,
+    item.cdn_url,
+    item.originUrl,
+    item.origin_url,
+    item.previewUrl,
+    item.preview_url,
+    item.thumbUrl,
+    item.thumb_url,
+    item.jumpUrl,
+    item.JumpUrl,
+    item.Url,
+    Array.isArray(item.urlList) ? item.urlList[0] : null,
+    Array.isArray(item.urls) ? item.urls[0] : null,
+    typeof item.image === 'string' ? item.image : item.image?.url,
+    typeof item.media === 'object' ? resolveYuanbaoMediaUrl(item.media) : null
+  ];
+  for (const u of candidates) {
+    const s = String(u || '').trim();
+    if (/^(https?:|data:image\/|blob:)/i.test(s)) return s;
+  }
+  return '';
+}
+
+function formatYuanbaoImageCard(url, title) {
+  const meta = {
+    kind: 'file',
+    type: 'image',
+    title: String(title || '图片').slice(0, 80) || '图片',
+    generatedAt: '',
+    url: String(url || '').trim()
+  };
+  if (typeof formatGeneratedFileCardsMarkdown === 'function') {
+    return formatGeneratedFileCardsMarkdown([meta]);
+  }
+  return meta.url ? `![${meta.title}](${meta.url})` : `📎 **${meta.title}**`;
+}
+
 /**
  * 清洗元宝正文里的内部标记（下划线 / 引用角标 / 媒体占位等）
  * 例：[](@mark_underline=1)[citation:2] (@replace=media_xxx) → 去掉或替换为附件
@@ -154,35 +200,40 @@ function cleanYuanbaoMarkup(text, mediaMap = null) {
   let s = String(text || '');
   if (!s) return '';
 
-  // 媒体占位：(@replace=media_xxx) → 尽量还原为图片/文件，否则去掉
+  // 媒体占位：(@replace=media_xxx) / [](@replace=n) → 图片/文件卡；解析不到也留图片卡
+  s = s.replace(/\[\s*\]\s*\(@replace=([^)]+)\)/gi, '(@replace=$1)');
   s = s.replace(/\(@replace=([^)]+)\)/gi, (_, rawId) => {
     const id = String(rawId || '').trim();
-    if (!id || !mediaMap) return '';
-    const media =
-      mediaMap.get(id) ||
-      mediaMap.get(id.replace(/^media_/i, '')) ||
-      mediaMap.get(`media_${id}`);
-    if (!media) return '';
-    const name = media.fileName || media.name || media.title || '附件';
-    const url = media.url || media.fileUrl || media.downloadUrl || '';
-    const type = String(media.type || media.fileType || '').toLowerCase();
-    if (url && /image|img|png|jpe?g|gif|webp/.test(type + name)) {
-      return `\n![${name}](${url})\n`;
+    if (!id) return '';
+    const media = mediaMap
+      ? mediaMap.get(id) ||
+        mediaMap.get(id.replace(/^media_/i, '')) ||
+        mediaMap.get(`media_${id}`)
+      : null;
+    if (media) {
+      const name = media.fileName || media.name || media.title || '图片';
+      const url = media.url || '';
+      const type = String(media.type || '').toLowerCase();
+      const isImage =
+        /image|img|png|jpe?g|gif|webp|draw|picture/i.test(type + name + id) || !!url;
+      if (isImage) return `\n${formatYuanbaoImageCard(url, name || '图片')}\n`;
+      if (url) return `\n[${name}](${url})\n`;
+      if (typeof formatGeneratedFileCardsMarkdown === 'function') {
+        return (
+          '\n' +
+          formatGeneratedFileCardsMarkdown([
+            { kind: 'file', type: type || 'file', title: name, generatedAt: '', url: '' }
+          ]) +
+          '\n'
+        );
+      }
+      return `\n📎 **${name}**\n`;
     }
-    if (url) return `\n[${name}](${url})\n`;
-    if (typeof formatGeneratedFileCardsMarkdown === 'function') {
-      return (
-        '\n' +
-        formatGeneratedFileCardsMarkdown([
-          { kind: 'file', type: type || 'file', title: name, generatedAt: '' }
-        ]) +
-        '\n'
-      );
-    }
-    return `\n📎 **${name}**\n`;
+    // 生图占位解析失败：先留空，本轮末尾再决定是否补卡（避免与真图叠两张）
+    return '';
   });
 
-  // 其它内部指令：(@xxx=yyy)
+  // 其它内部指令：(@xxx=yyy) —— 保留已展开的 ACM_FILE
   s = s.replace(/\(@[a-zA-Z_][\w]*=[^)]*\)/g, '');
 
   // 常见组合：[](@mark_underline=n)[citation:m]
@@ -205,45 +256,95 @@ function cleanYuanbaoMarkup(text, mediaMap = null) {
 
 function buildYuanbaoMediaMap(data, turns = []) {
   const map = new Map();
-  const add = (item) => {
+  const add = (item, forcedId) => {
     if (!item || typeof item !== 'object') return;
+    if (Array.isArray(item.multimedia)) {
+      item.multimedia.forEach((m) => add(m, forcedId || item.id));
+    }
+    if (Array.isArray(item.Multimedia)) {
+      item.Multimedia.forEach((m) => add(m, forcedId || item.id));
+    }
     const id =
+      forcedId ||
       item.id ||
+      item.Id ||
       item.mediaId ||
       item.media_id ||
       item.fileId ||
       item.file_id ||
-      item.key;
-    if (!id) return;
+      item.key ||
+      item.replaceId ||
+      item.replace_id;
+    const url = resolveYuanbaoMediaUrl(item);
+    const type = String(item.type || item.Type || item.fileType || item.mimeType || '').toLowerCase();
+    const fileName = item.fileName || item.name || item.title || item.Title || '';
+    if (!id && !url) return;
     const entry = {
-      fileName: item.fileName || item.name || item.title || '',
-      url: item.url || item.fileUrl || item.downloadUrl || item.src || '',
-      type: item.type || item.fileType || item.mimeType || ''
+      fileName,
+      url,
+      type: type || (url && /\.(png|jpe?g|gif|webp)(\?|$)/i.test(url) ? 'image' : '')
     };
-    map.set(String(id), entry);
-    map.set(`media_${id}`, entry);
-    const bare = String(id).replace(/^media_/i, '');
-    if (bare !== String(id)) map.set(bare, entry);
+    const keys = [];
+    if (id != null && id !== '') {
+      keys.push(String(id), `media_${id}`);
+      const bare = String(id).replace(/^media_/i, '');
+      if (bare !== String(id)) keys.push(bare);
+    }
+    if (url) keys.push(url);
+    for (const k of keys) {
+      const prev = map.get(k);
+      // 有 URL 的覆盖无 URL 的
+      if (!prev || (!prev.url && entry.url)) map.set(k, entry);
+    }
   };
 
   const bags = [
     data?.multiMediaInfo,
     data?.multimedia,
+    data?.Multimedia,
     data?.mediaList,
     data?.medias,
-    data?.files
+    data?.files,
+    data?.replaces,
+    data?.Replaces,
+    data?.replaceList
   ];
   for (const bag of bags) {
-    if (Array.isArray(bag)) bag.forEach(add);
+    if (Array.isArray(bag)) bag.forEach((x) => add(x));
   }
 
+  const walkBlocks = (blocks) => {
+    if (!Array.isArray(blocks)) return;
+    for (const block of blocks) {
+      if (!block || typeof block !== 'object') continue;
+      const t = String(block.type || '').toLowerCase();
+      if (
+        block.fileName ||
+        resolveYuanbaoMediaUrl(block) ||
+        /image|img|draw|media|picture|multimodal|file|pdf|doc/i.test(t)
+      ) {
+        add(block);
+      }
+      if (Array.isArray(block.images)) block.images.forEach((x) => add(x));
+      if (Array.isArray(block.imageList)) block.imageList.forEach((x) => add(x));
+    }
+  };
+
   for (const turn of turns) {
-    const speeches = turn?.speechesV2 || turn?.speeches || [];
+    const speeches = turn?.speechesV2 || turn?.speeches || turn?.speechList || [];
     for (const speech of speeches) {
-      for (const block of speech?.content || []) {
-        if (block && (block.fileName || block.url || block.type === 'image')) add(block);
+      walkBlocks(speech?.content || speech?.contents || []);
+      if (Array.isArray(speech?.multiMediaInfo)) speech.multiMediaInfo.forEach((x) => add(x));
+      if (Array.isArray(speech?.multimedia)) speech.multimedia.forEach((x) => add(x));
+      if (Array.isArray(speech?.replaces)) speech.replaces.forEach((x) => add(x));
+      if (speech?.extra && typeof speech.extra === 'object') {
+        if (Array.isArray(speech.extra.multiMediaInfo)) {
+          speech.extra.multiMediaInfo.forEach((x) => add(x));
+        }
+        add(speech.extra);
       }
     }
+    if (Array.isArray(turn?.multiMediaInfo)) turn.multiMediaInfo.forEach((x) => add(x));
   }
   return map;
 }
@@ -252,24 +353,71 @@ function extractYuanbaoBlockText(block, mediaMap = null) {
   if (!block || typeof block !== 'object') return '';
   const type = String(block.type || '').toLowerCase();
   if (type === 'think' || type === 'thinking' || type === 'searchguid') return '';
-  if (type === 'text' || !type) {
+  if (type === 'text' || type === 'markdown' || type === 'md') {
     const t = block.msg || block.text || block.content || '';
     return cleanYuanbaoMarkup(typeof t === 'string' ? t : '', mediaMap);
   }
-  if (block.fileName || block.url || type === 'image' || type === 'pdf' || type === 'code') {
-    const title = block.fileName || block.title || type || '附件';
-    const url = block.url || '';
-    if (url && /image|img|png|jpe?g|gif|webp/i.test(type + title)) {
-      return `![${title}](${url})`;
+  if (!type) {
+    const t = block.msg || block.text || block.content || '';
+    if (typeof t === 'string' && t.trim()) return cleanYuanbaoMarkup(t, mediaMap);
+  }
+  const url = resolveYuanbaoMediaUrl(block);
+  const title = block.fileName || block.title || block.name || '';
+  const looksImage =
+    /image|img|draw|picture|photo|multimodal|media/i.test(type) ||
+    /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(url + title) ||
+    (!!url && !/pdf|docx?|xlsx?|pptx?/i.test(type + title));
+  if (url || title || /image|img|draw|pdf|doc|file|code|media/i.test(type)) {
+    if (looksImage || /image|img|draw/i.test(type)) {
+      return formatYuanbaoImageCard(url, title || '图片');
     }
     if (typeof formatGeneratedFileCardsMarkdown === 'function') {
       return formatGeneratedFileCardsMarkdown([
-        { kind: 'file', type: type || 'file', title, generatedAt: '' }
+        {
+          kind: 'file',
+          type: type || 'file',
+          title: title || type || '附件',
+          generatedAt: '',
+          url: url || ''
+        }
       ]);
     }
-    return `📎 **${title}**`;
+    return title ? `📎 **${title}**` : '';
   }
   return '';
+}
+
+function extractYuanbaoTurnImages(turn) {
+  const cards = [];
+  const push = (url, title) => {
+    const u = String(url || '').trim();
+    if (!u) return;
+    if (cards.some((c) => c.url === u)) return;
+    cards.push({
+      kind: 'file',
+      type: 'image',
+      title: String(title || '图片').slice(0, 80),
+      generatedAt: '',
+      url: u
+    });
+  };
+  const speeches = turn?.speechesV2 || turn?.speeches || turn?.speechList || [];
+  for (const speech of speeches) {
+    for (const block of speech?.content || speech?.contents || []) {
+      if (!block) continue;
+      const t = String(block.type || '').toLowerCase();
+      const url = resolveYuanbaoMediaUrl(block);
+      if (url && (/image|img|draw|media|picture/i.test(t) || /\.(png|jpe?g|gif|webp)/i.test(url) || !t)) {
+        if (!t || /image|img|draw|media|picture|file/i.test(t) || /\.(png|jpe?g|gif|webp)/i.test(url)) {
+          push(url, block.fileName || block.title || '图片');
+        }
+      }
+      if (Array.isArray(block.images)) {
+        for (const im of block.images) push(resolveYuanbaoMediaUrl(im) || im?.url, '图片');
+      }
+    }
+  }
+  return cards;
 }
 
 function extractYuanbaoTurnContent(turn, mediaMap = null) {
@@ -297,7 +445,59 @@ function extractYuanbaoTurnContent(turn, mediaMap = null) {
   if (!parts.length && typeof turn.prompt === 'string' && turn.prompt.trim()) {
     parts.push(cleanYuanbaoMarkup(turn.prompt, mediaMap));
   }
-  return cleanYuanbaoMarkup(parts.join('\n\n'), mediaMap);
+  let out = cleanYuanbaoMarkup(parts.join('\n\n'), mediaMap);
+  // 补抽本轮独立图片块（正文里没有图片卡时）
+  if (!/"type":"image"/.test(out) && !/!\[[^\]]*\]\(https?:/.test(out)) {
+    const imgs = extractYuanbaoTurnImages(turn);
+    if (imgs.length && typeof mergeFileCardsIntoContent === 'function') {
+      out = mergeFileCardsIntoContent(out, imgs);
+    } else if (imgs.length) {
+      out = [out, ...imgs.map((c) => formatYuanbaoImageCard(c.url, c.title))]
+        .filter(Boolean)
+        .join('\n\n');
+    }
+  }
+  // 生图话术但无卡：落占位卡
+  if (
+    /画好了|生成了一?张|已为你生成|绘制完成|文生图|生图完成/i.test(out) &&
+    !/"type":"image"/.test(out) &&
+    !/!\[[^\]]*\]\(https?:/.test(out)
+  ) {
+    out = `${out}\n\n${formatYuanbaoImageCard('', '图片')}`;
+  }
+  if (typeof promoteFilenameLinesToFileCards === 'function') {
+    out = promoteFilenameLinesToFileCards(out);
+  }
+  out = dropEmptyImagePlaceholdersIfReal(out);
+  if (typeof dedupeAcmFileCardsInText === 'function') {
+    out = dedupeAcmFileCardsInText(out);
+  }
+  return out;
+}
+
+/** 已有真图 URL 时，丢掉无 URL 的占位图片卡 */
+function dropEmptyImagePlaceholdersIfReal(text) {
+  let s = String(text || '');
+  if (!s || !/@@ACM_FILE:/.test(s)) return s;
+  const hasReal =
+    /!\[[^\]]*\]\(https?:[^)]+\)/i.test(s) ||
+    /@@ACM_FILE:\{[^}]*"url":"https?:[^"]+"[^}]*\}@@/i.test(s);
+  if (!hasReal) return s;
+  s = s.replace(
+    /@@ACM_FILE:(\{[\s\S]*?\})@@(?:\n(?:📎[^\n]*|生成时间：[^\n]*|（交互式文件[^\n]*）))*/g,
+    (full, json) => {
+      try {
+        const meta = JSON.parse(json);
+        if (/image/i.test(String(meta?.type || '')) && !String(meta?.url || '').trim()) {
+          return '';
+        }
+      } catch {
+        // keep
+      }
+      return full;
+    }
+  );
+  return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function normalizeYuanbaoRole(speaker) {
@@ -844,14 +1044,8 @@ function injectYuanbaoHook() {
   };
 })();`;
 
-  try {
-    const el = document.createElement('script');
-    el.textContent = source;
-    (document.documentElement || document.head || document.body).appendChild(el);
-    el.remove();
-  } catch (err) {
-    console.warn('[ACM Yuanbao] hook 注入失败', err);
-  }
+  // 禁止内联 script（会触发站点 CSP 红字）。页面 hook 仅由 manifest world:MAIN 注入。
+  void source;
 }
 
 if (typeof globalThis !== 'undefined') {
@@ -860,4 +1054,5 @@ if (typeof globalThis !== 'undefined') {
   globalThis.buildYuanbaoCanonicalUrl = buildYuanbaoCanonicalUrl;
   globalThis.fetchYuanbaoConversation = fetchYuanbaoConversation;
   globalThis.injectYuanbaoHook = injectYuanbaoHook;
+  globalThis.dropEmptyImagePlaceholdersIfReal = dropEmptyImagePlaceholdersIfReal;
 }

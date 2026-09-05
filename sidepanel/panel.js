@@ -1,7 +1,8 @@
 /**
  * 侧边栏主逻辑
  */
-import { renderMarkdown, highlightSearchText, getSearchSnippet } from '../lib/markdown.js';
+import { renderMarkdown, highlightSearchText, getSearchSnippet } from '../lib/markdown.js?v=0.1.43';
+import { parseSearchQuery } from '../lib/search-query.js?v=0.1.43';
 import { formatDate, getPlatformLabel, getUserMessages, copyText, truncateFolderName, repairMessageRoles, dedupeMessages } from '../utils/helpers-export.js';
 import { conversationToMarkdown } from '../lib/export.js';
 import { showConfirm, showPrompt } from './dialog.js';
@@ -38,40 +39,38 @@ function showToast(text, duration) {
   setTimeout(() => toast.classList.add('hidden'), ms);
 }
 
-/** 详情页展示时剥离思考过程外壳与卡片 JSON（不改存储；完整正文需重新保存） */
+/** 详情页展示时剥离思考过程外壳与卡片 JSON（不改存储；不切片改写正文） */
 function stripThinkingForDisplay(text) {
   let s = String(text || '').trim();
   if (!s) return '';
 
-  // 平衡括号剔除 JSON 卡片（比按空行切更稳）
   s = stripJsonCardsForDisplay(s);
   if (!s) return '';
 
   s = s.replace(/^(?:已完成思考|Finished thinking)[^\n]*\n+/i, '');
   s = s.replace(/^参考了\s*\d+\s*篇材料[^\n]*\n+/i, '');
-  const start = s.slice(0, 120);
-  if (
-    /^(已完成思考|Finished thinking|明确选择问题|搜索\s*\d+\s*个关键词|用户想知道|用户想|Thinking)/i.test(
-      start
-    )
-  ) {
-    const patterns = [
-      /(?:^|\n)((?:#{1,6}\s+)?(?:\*\*)?[一二三四五六七八九十]+[、．.])/u,
-      /(?:^|\n)((?:#{1,6}\s+)?(?:\*\*)?\d+[\.、]\s*)/u,
-      /(?:^|\n)(\| .+\|)/,
-      /(?:^|\n)((?:#{1,6}\s+).+)/
-    ];
-    let cut = -1;
-    for (const re of patterns) {
-      const m = s.match(re);
-      if (m && typeof m.index === 'number') {
-        const idx = m.index + (m[0].startsWith('\n') ? 1 : 0);
-        if (cut < 0 || idx < cut) cut = idx;
+  s = s
+    .split('\n')
+    .filter((line, idx) => {
+      const t = line.replace(/\s+/g, '').trim();
+      if (!t) return true;
+      if (/^(已完成思考|Finishedthinking|参考了\d+篇材料|表格|下载为表格|导出为图片)$/i.test(t)) {
+        return false;
       }
-    }
-    if (cut > 20) s = s.slice(cut).trim();
-  }
-  return s.trim();
+      if (
+        idx < 8 &&
+        /^(明确选择问题|搜索\d+个关键词|site_name|web_search|deep_thinking|用户想知道|用户希望|接下来我将|当前已查)/i.test(
+          t
+        ) &&
+        t.length < 200 &&
+        !/想要成为|具体而言|首先|可以|建议/.test(t)
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .join('\n');
+  return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function stripJsonCardsForDisplay(text) {
@@ -139,6 +138,305 @@ function normalizeAssistantDisplayText(text) {
     /(冲刺档|稳妥档|保底档|冲档|稳档|保档)([^\n]{0,40}[）\)])\s*(?=[^\n])/g,
     '$1$2\n'
   );
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** 详情展示：去掉千问推荐卡标题/话题墙；保留正文图片与文档卡 */
+function stripQianwenCardSoupForDisplay(text) {
+  let s = String(text || '');
+  if (!s) return '';
+  // 整段检索报告标题墙
+  {
+    const reportHits = (s.match(/20\d{2}[^\n。]{0,20}(趋势|报告|蓝皮书|白皮书|行业发展)/g) || [])
+      .length;
+    const mdLinks = s.match(/\[[^\]]{4,50}\]\(https?:[^)]+\)/g) || [];
+    if (
+      (reportHits >= 3 || mdLinks.length >= 4) &&
+      !/已为您生成|论文概要|这就为您|@@ACM_FILE:/.test(s)
+    ) {
+      return '';
+    }
+    if (/已为您生成|论文概要/.test(s) && (reportHits >= 3 || mdLinks.length >= 4)) {
+      // 保留真回答段，去掉链接墙行
+      s = s
+        .split(/\n+/)
+        .filter((l) => {
+          const t = l.trim();
+          if (!t) return false;
+          if (/\[[^\]]+\]\(https?:/.test(t) && t.length < 80) return false;
+          if (/20\d{2}.{0,16}(趋势|报告|蓝皮书)/.test(t) && !/[。]/.test(t) && t.length < 70) {
+            return false;
+          }
+          return true;
+        })
+        .join('\n\n');
+    }
+  }
+  s = s.replace(
+    /(^|\n)\s*(收起|展开|添加到对话|下载|复制|分享|点赞|踩|重新生成)\s*(?=\n|$)/g,
+    '$1'
+  );
+  // 生图进度残留
+  s = s.replace(/(^|\n)\s*\d{1,3}\s*%\s*(?=\n|$)/g, '$1');
+  s = s.replace(
+    /(^|\n)\s*(生成中|绘制中|加载中|正在生成|生图中)[^\n]{0,20}\s*(?=\n|$)/g,
+    '$1'
+  );
+  const files = [];
+  s = s.replace(/@@ACM_FILE:(\{[\s\S]*?\})@@(?:\n[^\n@]*)?/g, (full, json) => {
+    try {
+      const meta = JSON.parse(json);
+      const hint = `${meta?.type || ''} ${meta?.title || ''} ${meta?.url || ''}`;
+      if (/bili_|quark|recommend|reference|#成长|#情绪|财经速记|心灵成长/i.test(hint)) {
+        return '\n';
+      }
+      files.push(`@@ACM_FILE:${json}@@`);
+      return `\n\n%%ACM_FILE_${files.length - 1}%%\n\n`;
+    } catch {
+      return '\n';
+    }
+  });
+  s = s.replace(/!\[([^\]]*)\]\((https?:[^)]+)\)/g, (full, alt, url) => {
+    if (/bili_|quark|recommend/i.test(`${alt} ${url}`)) return '';
+    return full;
+  });
+  s = s.replace(/(?:[^\n#]{0,40}#[\u4e00-\u9fffA-Za-z0-9_]{2,24}){2,}/g, '\n');
+  s = s.replace(/\d{2}:\d{2}[^\n]{0,80}bili_\w+/gi, '');
+  s = s.replace(/bili_\w+/gi, '');
+
+  // 文末短行墙：从尾部撕推荐标题；短问句不当真正文
+  {
+    const lines = s.split(/\n/);
+    const isMedia = (t) => /^%%ACM_FILE_/.test(t) || /^!\[/.test(t) || /^\|/.test(t);
+    const isRec = (t) =>
+      (t.length <= 50 && /[？?]$/.test(t) && !/[。]/.test(t)) ||
+      (t.length <= 42 && /[，、]/.test(t) && !/[。]/.test(t)) ||
+      (t.length <= 18 && !/[。；]/.test(t)) ||
+      /秒懂：|直击心灵|父母核心|合格的父母|足够好|清华护肤|清醒记录|情绪收纳|治愈系|时间流逝前|和父母沟通|好父母的\d|关键词|情感能量|豆豆妈/i.test(
+        t
+      );
+
+    let cut = lines.length;
+    let streak = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const t = lines[i].trim();
+      if (!t) {
+        if (streak > 0) {
+          cut = i;
+          continue;
+        }
+        break;
+      }
+      if (isMedia(t)) break;
+      if (isRec(t) && t.length <= 72) {
+        streak += 1;
+        cut = i;
+        continue;
+      }
+      break;
+    }
+    if (streak >= 2) s = lines.slice(0, cut).join('\n');
+
+    const lines2 = s.split(/\n/);
+    let lastProse = -1;
+    for (let i = 0; i < lines2.length; i++) {
+      const t = lines2[i].trim();
+      if (!t) continue;
+      if (isMedia(t)) {
+        lastProse = i;
+        continue;
+      }
+      if (isRec(t)) continue;
+      if (
+        (/[。]/.test(t) && t.length >= 18) ||
+        (/^(\d+\.|[-*+]\s|#{1,6}\s)/.test(t) && t.length > 8) ||
+        /你现在是遇到了|如果愿意|可以说说看|我们一起探讨|方便告诉我|这就为您|为确保完全符合/.test(t)
+      ) {
+        lastProse = i;
+      }
+    }
+    if (lastProse >= 0 && lastProse < lines2.length - 1) {
+      const tail = lines2
+        .slice(lastProse + 1)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      const junk = tail.filter((t) => !isMedia(t) && (isRec(t) || t.length <= 72));
+      if (junk.length >= 2 && junk.length >= Math.ceil(tail.length * 0.5)) {
+        s = lines2.slice(0, lastProse + 1).join('\n');
+      }
+    }
+  }
+
+  s = s
+    .split(/\n+/)
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return false;
+      if (/^%%ACM_FILE_\d+%%$/.test(t)) return true;
+      if (/^!\[/.test(t)) return true;
+      if (/^\|.+\|/.test(t)) return true;
+      if (/^(收起|展开|添加到对话|下载|复制|分享)$/.test(t)) return false;
+      const hashCount = (t.match(/#/g) || []).length;
+      if (hashCount >= 2 && t.length < 240) return false;
+      if (
+        /情感能量棒|恋爱能量收集站|豆豆妈育儿分享|营薛心灵拓印集|苔藓心灵拓印集|素素社会备忘录|高情商爸爸|成长情绪|财经速记|心灵成长|清华护肤学长|清醒记录仪|情绪收纳箱|治愈系心灵屋/i.test(
+          t
+        ) &&
+        t.length < 220
+      ) {
+        return false;
+      }
+      if (
+        /^(秒懂：|直击心灵|想做个好父母|如何做赋能型父母|父母核心准则|做个好父母|家长必看|做到这)/.test(
+          t
+        ) &&
+        t.length < 60
+      ) {
+        return false;
+      }
+      if (t.length <= 50 && /[？?]$/.test(t) && !/[。]/.test(t)) return false;
+      if (t.length <= 42 && /[，、]/.test(t) && !/[。]/.test(t) && !/^(\d+\.|[-*+])/.test(t)) {
+        return false;
+      }
+      if (/\d{2}:\d{2}/.test(t) && t.length < 80) return false;
+      if (t.length <= 16 && /室|店|盘|记$/.test(t)) return false;
+      return true;
+    })
+    .join('\n\n');
+  s = s.replace(/%%ACM_FILE_(\d+)%%/g, (_, i) => files[Number(i)] || '');
+  s = s.replace(
+    /(^|\n)\s*文件名\s*[：:]\s*([^\n]+?\.(?:docx?|pdf|xlsx?|pptx?|zip|txt|csv|md|png|jpe?g|gif|webp))\s*(?=\n|$)/gi,
+    (_, lead, name) => {
+      const title = String(name || '').trim();
+      if (!title) return _;
+      const isImage = /\.(png|jpe?g|gif|webp)$/i.test(title);
+      const meta = {
+        kind: 'file',
+        type: isImage ? 'image' : 'document',
+        title,
+        generatedAt: '',
+        url: ''
+      };
+      return `${lead}\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+    }
+  );
+  s = s.replace(
+    /(^|\n)\s*\*{0,2}((?:大纲|论文|文档|PPT|报告)\s*\|\s*[^\n*]{2,40})\*{0,2}\s*\n+\s*创建于\s*([\d/\-.\s:]+)\s*(?=\n|$)/g,
+    (_, lead, title, time) => {
+      const meta = {
+        kind: 'file',
+        type: 'document',
+        title: String(title || '').trim(),
+        generatedAt: String(time || '').trim(),
+        url: ''
+      };
+      return `${lead}\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+    }
+  );
+  // Markdown 图 → 统一卡片
+  s = s.replace(/!\[([^\]]*)\]\((https?:[^)\s]+)\)/g, (full, alt, url) => {
+    const u = String(url || '').trim();
+    if (!u || /bili_|quark|recommend|icon|avatar|logo/i.test(`${alt} ${u}`)) return '';
+    if (s.includes(`"url":"${u}"`)) return '';
+    const meta = {
+      kind: 'file',
+      type: 'image',
+      title: String(alt || '图片').trim().slice(0, 80) || '图片',
+      generatedAt: '',
+      url: u
+    };
+    return `\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+  });
+  s = s.replace(/!\[([^\]]*)\]\((blob:[^)\s]+)\)/g, (full, alt) => {
+    if (/@@ACM_FILE:\{[^}]*"type":"image"/.test(s)) return '';
+    const meta = {
+      kind: 'file',
+      type: 'image',
+      title: String(alt || '图片').trim().slice(0, 80) || '图片',
+      generatedAt: '',
+      url: ''
+    };
+    return `\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+  });
+  // Word/PPT 已生成完毕 → 文档卡
+  s = s.replace(
+    /(^|\n)([^\n]{0,100}?(?:Word\s*)?(?:PPT\s*)?(?:Excel\s*)?(?:PDF\s*)?(?:文档|表格|幻灯片)?已生成完毕[^\n]{0,50})(?=\n|$)/gi,
+    (full, lead, line) => {
+      const t = String(line || '').trim();
+      if (!t) return full;
+      let type = 'document';
+      let title = '生成文档';
+      if (/PPT|幻灯/i.test(t)) {
+        type = 'presentation';
+        title = 'PPT';
+      } else if (/Excel|表格/i.test(t)) {
+        type = 'spreadsheet';
+        title = '表格';
+      } else if (/Word/i.test(t)) title = 'Word 文档';
+      else if (/PDF/i.test(t)) title = 'PDF 文档';
+      if (s.includes(`"title":${JSON.stringify(title)}`)) return `${lead}${t}`;
+      const meta = { kind: 'file', type, title, generatedAt: '', url: '' };
+      return `${lead}${t}\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+    }
+  );
+  // 生图文案但无图片卡 → 补一张（旧记录）；已有则去重
+  if (
+    /Qwen-Image|绘制一张|生成一张.*图|本次使用.+模型生成/i.test(s) &&
+    !/"type":"image"/.test(s)
+  ) {
+    const meta = { kind: 'file', type: 'image', title: '图片', generatedAt: '', url: '' };
+    s = `${s}\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+  }
+  // 去掉重复图片卡：同 URL 去重；保留多张不同 URL（Kimi 搜图）
+  {
+    const blocks = [];
+    s = s.replace(/@@ACM_FILE:(\{[\s\S]*?\})@@(?:\n(?:📎[^\n]*|生成时间：[^\n]*|（交互式文件[^\n]*）))*/g, (full, json) => {
+      try {
+        blocks.push({ full, meta: JSON.parse(json) });
+      } catch {
+        blocks.push({ full, meta: null });
+      }
+      return `\n%%ACM_PANEL_DEDUP_${blocks.length - 1}%%\n`;
+    });
+    const seenUrl = new Set();
+    let keptEmptyImage = false;
+    const seenFile = new Set();
+    s = s.replace(/%%ACM_PANEL_DEDUP_(\d+)%%/g, (_, i) => {
+      const idx = Number(i);
+      const b = blocks[idx];
+      if (!b?.meta) return b?.full || '';
+      if (/image/i.test(b.meta.type || '')) {
+        const url = String(b.meta.url || '').trim();
+        if (url) {
+          const key = url.replace(/[?#].*$/, '');
+          if (seenUrl.has(key)) return '';
+          seenUrl.add(key);
+          keptEmptyImage = true;
+          return b.full;
+        }
+        if (keptEmptyImage || seenUrl.size) return '';
+        if (keptEmptyImage) return '';
+        keptEmptyImage = true;
+        return b.full;
+      }
+      const key = `${b.meta.type}::${b.meta.title}::${b.meta.url || ''}`;
+      if (seenFile.has(key)) return '';
+      seenFile.add(key);
+      return b.full;
+    });
+  }
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** 详情展示：仅恢复「列表项」前的换行（不按句号发明段落，避免改写原文） */
+function ensureQianwenParagraphBreaksForDisplay(text) {
+  let s = String(text || '').trim();
+  if (!s) return '';
+  // 已有换行则不动
+  if ((s.match(/\n/g) || []).length >= 2) return s;
+  // 正文中间的 1. / 2. 列表抬成独立段
+  s = s.replace(/([^\n])\s+(?=\d+\.\s+)/g, '$1\n\n');
+  s = s.replace(/([^\n])\s+(?=\*\*\d+\.\s+)/g, '$1\n\n');
   return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
@@ -298,16 +596,41 @@ function renderConversationList() {
     el.className = 'conversation-item' + (conv.favorite ? ' favorite' : '');
     el.dataset.id = conv.id;
 
-    const snippet = state.searchQuery
-      ? getSearchSnippet(conv, state.searchQuery)
-      : (conv.messages?.[0]?.content?.slice(0, 50) || '');
+    const q = state.searchQuery;
+    const parsed = q ? parseSearchQuery(q) : null;
+    const contentTerms = parsed?.terms?.length ? parsed.terms : parsed?.highlightTerms || [];
+    const snippet = q ? getSearchSnippet(conv, q) : '';
+    const titleHtml = q
+      ? highlightSearchText(conv.title || '', q)
+      : escapeHtml(conv.title || '');
+    let snippetHtml = '';
+    if (q) {
+      const snipOk =
+        snippet &&
+        (!contentTerms.length ||
+          contentTerms.some((t) => snippet.toLowerCase().includes(String(t).toLowerCase())));
+      const snip =
+        snipOk
+          ? snippet
+          : getSearchSnippet({ title: conv.title, messages: conv.messages || [] }, q) ||
+            (contentTerms.some((t) =>
+              String(conv.title || '')
+                .toLowerCase()
+                .includes(String(t).toLowerCase())
+            )
+              ? conv.title
+              : '');
+      if (snip) {
+        snippetHtml = `<div class="conv-snippet">${highlightSearchText(snip, q)}</div>`;
+      }
+    }
 
     el.innerHTML = `
       <span class="conv-icon">📄</span>
       <div class="conv-body">
-        <div class="conv-title">${escapeHtml(conv.title)}</div>
+        <div class="conv-title">${titleHtml}</div>
         <div class="conv-meta">${getPlatformLabel(conv.platform)} · ${formatDate(conv.createdAt)}${getFolderLabel(conv.folderId)}</div>
-        ${state.searchQuery ? `<div class="conv-snippet">${highlightSearchText(snippet, state.searchQuery)}</div>` : ''}
+        ${snippetHtml}
       </div>
     `;
 
@@ -343,7 +666,15 @@ async function openDetail(id) {
   contentEl.innerHTML = displayMessages.map((msg) => {
     const roleLabel = msg.role === 'user' ? '用户' : 'AI';
     let body = msg.content || '';
-    if (msg.role === 'assistant') {
+    if (msg.role === 'user') {
+      // 旧记录：用户提问里误挂的图片卡直接剥掉
+      body = body.replace(
+        /@@ACM_FILE:(\{[\s\S]*?\})@@(?:\n(?:📎[^\n]*|生成时间：[^\n]*|（交互式文件[^\n]*）))*/g,
+        ''
+      );
+      body = body.replace(/!\[[^\]]*\]\(https?:[^)]+\)/g, '');
+      body = body.replace(/\n{3,}/g, '\n\n').trim();
+    } else if (msg.role === 'assistant') {
       body = sanitizeAssistantBodyForDisplay(body, conv);
     }
     const html = renderAssistantMessageHtml(body);
@@ -356,11 +687,23 @@ async function openDetail(id) {
   }).join('');
 
   contentEl.querySelectorAll('.copy-code-btn').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      const code = e.target.closest('.code-block')?.querySelector('code')?.textContent;
-      if (code) {
-        navigator.clipboard.writeText(code);
+    btn.addEventListener('click', async (e) => {
+      const block = e.target.closest('.code-block');
+      let code = '';
+      try {
+        if (block?.dataset?.code) code = decodeURIComponent(block.dataset.code);
+      } catch {
+        code = '';
+      }
+      if (!code) {
+        code = block?.querySelector('code')?.textContent || '';
+      }
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
         showToast('代码已复制');
+      } catch {
+        showToast('复制失败，请手动选择复制');
       }
     });
   });
@@ -410,11 +753,64 @@ function bindMessageExpandControls(root) {
   requestAnimationFrame(apply);
 }
 
+/** 详情展示：Kimi image_search 占位 → 去掉原文；无图卡时留提示卡 */
+function resolveKimiImageMarkersForDisplay(text) {
+  let s = String(text || '');
+  if (!s || !/image_search:\d+#\d+/i.test(s)) return s;
+  const hasReal = /@@ACM_FILE:\{[^}]*"url":"https?:[^"]+"[^}]*\}@@/i.test(s);
+  const refs = [...s.matchAll(/image_search:\d+#\d+/gi)];
+  const markerRe =
+    /(?:[\uE000-\uF8FF]\s*)?(?:\[\s*\])?\s*image\s*(?:🛠️|🛠|\u{1F6E0}\uFE0F?)\s*((?:image_search:\d+#\d+\s*(?:🛠️|🛠|\u{1F6E0}\uFE0F?)?\s*)+)(?:[\uE000-\uF8FF]\s*)?(?:\[\s*\])?/giu;
+  if (hasReal) {
+    s = s.replace(markerRe, '\n');
+    s = s.replace(/(?:🛠️|🛠)?\s*image_search:\d+#\d+/gi, '');
+  } else {
+    const n = Math.min(Math.max(refs.length, 1), 6);
+    const cards = [];
+    for (let i = 0; i < n; i++) {
+      cards.push(
+        `@@ACM_FILE:${JSON.stringify({
+          kind: 'file',
+          type: 'image',
+          title: '图片',
+          generatedAt: '',
+          url: ''
+        })}@@`
+      );
+    }
+    if (markerRe.test(s)) {
+      markerRe.lastIndex = 0;
+      s = s.replace(markerRe, `\n\n${cards.join('\n\n')}\n\n`);
+    } else {
+      s = s.replace(
+        /(?:\[\s*\])?\s*image\s*(?:🛠️|🛠)?\s*((?:image_search:\d+#\d+\s*(?:🛠️|🛠)?\s*)+)/gi,
+        `\n\n${cards.join('\n\n')}\n\n`
+      );
+      s = s.replace(/(?:🛠️|🛠)?\s*image_search:\d+#\d+/gi, '');
+    }
+  }
+  s = s.replace(/[\uE000-\uF8FF]/g, '');
+  s = s.replace(/\[\s*\]/g, '');
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function stripYuanbaoMarkupForDisplay(text) {
   let s = String(text || '');
   if (!s) return '';
+  const hasRealImage =
+    /!\[[^\]]*\]\(https?:[^)]+\)/i.test(s) ||
+    /@@ACM_FILE:\{[^}]*"url":"https?:[^"]+"[^}]*\}@@/i.test(s);
+  // 未解析的媒体占位：已有真图则直接丢掉，否则才补占位卡
+  if (/\(@replace=/i.test(s) || /\[\s*\]\s*\(@replace=/i.test(s)) {
+    s = s.replace(/\[\s*\]\s*\(@replace=([^)]+)\)/gi, '(@replace=$1)');
+    s = s.replace(/\(@replace=([^)]+)\)/gi, () => {
+      if (hasRealImage) return '';
+      const meta = { kind: 'file', type: 'image', title: '图片', generatedAt: '', url: '' };
+      return `\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+    });
+  }
   if (!/@mark_underline|\[citation:\d+\]|\[\s*\]|@replace=|\(@[a-zA-Z_]/.test(s)) {
-    return s;
+    return dropEmptyImageCardsForDisplay(s);
   }
   s = s.replace(/\(@replace=[^)]*\)/gi, '');
   s = s.replace(/\(@[a-zA-Z_][\w]*=[^)]*\)/g, '');
@@ -425,7 +821,62 @@ function stripYuanbaoMarkupForDisplay(text) {
   s = s.replace(/[\u200b\u200c\u200d\ufeff]/g, '');
   s = s.replace(/[ \t]{2,}/g, ' ');
   s = s.replace(/\n{3,}/g, '\n\n');
-  return s.trim();
+  return dropEmptyImageCardsForDisplay(s.trim());
+}
+
+/** 展示侧：有真图时去掉无 URL 占位卡；同回答只留一张图卡 */
+function dropEmptyImageCardsForDisplay(text) {
+  let s = String(text || '');
+  if (!s || !/@@ACM_FILE:/.test(s)) return s;
+  const hasReal =
+    /!\[[^\]]*\]\(https?:[^)]+\)/i.test(s) ||
+    /@@ACM_FILE:\{[^}]*"url":"https?:[^"]+"[^}]*\}@@/i.test(s);
+  const blocks = [];
+  s = s.replace(
+    /@@ACM_FILE:(\{[\s\S]*?\})@@(?:\n(?:📎[^\n]*|生成时间：[^\n]*|（交互式文件[^\n]*）))*/g,
+    (full, json) => {
+      try {
+        blocks.push({ full, meta: JSON.parse(json) });
+      } catch {
+        blocks.push({ full, meta: null });
+      }
+      return `\n%%YB_IMG_${blocks.length - 1}%%\n`;
+    }
+  );
+  const images = blocks
+    .map((b, i) => ({ ...b, i }))
+    .filter((b) => b.meta && /image/i.test(String(b.meta.type || '')));
+  let keepImage = -1;
+  if (images.length) {
+    const scored = images
+      .map((b) => ({
+        i: b.i,
+        score: (String(b.meta.url || '').trim() ? 10000 : 0) + String(b.meta.url || '').length
+      }))
+      .sort((a, b) => b.score - a.score);
+    keepImage = scored[0].i;
+    // 有真图时不留空占位
+    if (hasReal || String(blocks[keepImage]?.meta?.url || '').trim()) {
+      const url = String(blocks[keepImage]?.meta?.url || '').trim();
+      if (!url && hasReal) keepImage = -1;
+    }
+  }
+  const seenFile = new Set();
+  s = s.replace(/%%YB_IMG_(\d+)%%/g, (_, idx) => {
+    const i = Number(idx);
+    const b = blocks[i];
+    if (!b?.meta) return b?.full || '';
+    if (/image/i.test(String(b.meta.type || ''))) {
+      if (i !== keepImage) return '';
+      if (hasReal && !String(b.meta.url || '').trim()) return '';
+      return b.full;
+    }
+    const key = `${b.meta.type}::${b.meta.title}::${b.meta.url || ''}`;
+    if (seenFile.has(key)) return '';
+    seenFile.add(key);
+    return b.full;
+  });
+  return s.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function sanitizeAssistantBodyForDisplay(body, conv) {
@@ -455,8 +906,51 @@ function sanitizeAssistantBodyForDisplay(body, conv) {
   if (conv?.platform === 'yuanbao' || /@mark_underline|\[citation:\d+\]|@replace=|\(@[a-zA-Z_]/.test(s)) {
     s = stripYuanbaoMarkupForDisplay(s);
   }
+  // 元宝旧记录：生图话术但无图片卡 → 补卡（已有真图/图卡则不补）
+  if (
+    conv?.platform === 'yuanbao' &&
+    /画好了|生成了一?张|已为你生成|绘制完成|文生图/i.test(s) &&
+    !/"type":"image"/.test(s) &&
+    !/!\[[^\]]*\]\(https?:/.test(s)
+  ) {
+    const meta = { kind: 'file', type: 'image', title: '图片', generatedAt: '', url: '' };
+    s = `${s}\n@@ACM_FILE:${JSON.stringify(meta)}@@\n`;
+  }
+  if (conv?.platform === 'yuanbao') {
+    s = dropEmptyImageCardsForDisplay(s);
+  }
+  // Kimi：展示时把 image_search 占位清掉（旧记录）；有真图卡则只去标记
+  if (conv?.platform === 'kimi' || /image_search:\d+#\d+/i.test(s)) {
+    s = resolveKimiImageMarkersForDisplay(s);
+  }
+  // Kimi 旧记录：空「文档」卡且无正文 → 提示重新保存（代码曾被误清洗）
+  if (conv?.platform === 'kimi') {
+    const bare = s
+      .replace(/@@ACM_FILE:\{[\s\S]*?\}@@/g, '')
+      .replace(/📎\s*\*\*[^*]+\*\*/g, '')
+      .replace(/（交互式文件[^）]*）/g, '')
+      .replace(/侧栏无法打开[^\n]*/g, '')
+      .trim();
+    if (
+      /@@ACM_FILE:\{[^}]*"type":"(?:document|generated_file)"[^}]*\}@@/.test(s) &&
+      bare.length < 20 &&
+      !/```/.test(s)
+    ) {
+      s =
+        '（此条代码内容曾被误存为文档卡片，请打开 Kimi 原对话后重新保存以恢复代码）';
+    }
+  }
   s = stripCssLeakForDisplay(s);
   s = normalizeAssistantDisplayText(s);
+  // 千问旧记录：展示时撕掉推荐卡标题墙（新保存路径已在抽取时处理）
+  if (conv?.platform === 'qianwen') {
+    s = stripQianwenCardSoupForDisplay(s);
+    s = ensureQianwenParagraphBreaksForDisplay(s);
+    // 修复历史错误落库的 ** 拆行
+    s = s.replace(/\*\*[ \t]*\r?\n+[ \t]*([^*\n][^\n]*)\r?\n+[ \t]*\*\*/g, '**$1**');
+    s = s.replace(/^[ \t]*\*\*[ \t]*$/gm, '');
+    s = s.replace(/\n{3,}/g, '\n\n').trim();
+  }
 
   const stillJunk =
     !s.trim() ||
@@ -491,7 +985,9 @@ function guessFileMetaForDisplay(text) {
   } else if (/表格|spreadsheet|excel/i.test(s)) {
     title = '表格文件';
     type = 'spreadsheet';
-  } else if (/文档|document|pdf/i.test(s)) {
+  } else if (
+    /(?:已为您生成|生成了).{0,12}文档|(?:^|[\s「])文档(?:[\s」]|$)|\.pdf(\?|$)/i.test(s)
+  ) {
     title = '文档';
     type = 'document';
   }
@@ -559,8 +1055,12 @@ function renderAssistantMessageHtml(text) {
 }
 
 function renderGeneratedFileCard(meta) {
-  const title = escapeHtml(meta?.title || '生成文件');
-  const time = meta?.generatedAt ? escapeHtml(meta.generatedAt) : '';
+  const rawTitle = String(meta?.title || '').trim();
+  const url = String(meta?.url || '').trim();
+  const safeUrl = /^(https?:|data:image\/)/i.test(url) ? escapeHtml(url) : '';
+  const isImage =
+    /image|img/i.test(meta?.type || '') ||
+    (!!safeUrl && /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url));
   const typeLabel =
     meta?.type === 'gaokao_zhiyuan_report'
       ? '高考志愿报告'
@@ -570,17 +1070,41 @@ function renderGeneratedFileCard(meta) {
           ? '文档'
           : meta?.type === 'spreadsheet'
             ? '表格'
-            : /image|img/i.test(meta?.type || '')
+            : isImage
               ? '图片'
               : /video/i.test(meta?.type || '')
                 ? '视频'
                 : 'AI 生成文件';
-  return `
-    <div class="acm-file-card">
-      <div class="acm-file-icon" aria-hidden="true">📄</div>
+  // 标题与类型相同时不重复显示（避免「图片 / 图片」）
+  const titleText =
+    !rawTitle || rawTitle === typeLabel || (isImage && /^(图片|image)$/i.test(rawTitle))
+      ? ''
+      : rawTitle;
+  const title = titleText ? escapeHtml(titleText) : '';
+  const time = meta?.generatedAt ? escapeHtml(meta.generatedAt) : '';
+  const alt = escapeHtml(rawTitle || typeLabel);
+
+  if (isImage && safeUrl) {
+    return `
+    <div class="acm-file-card acm-image-card">
       <div class="acm-file-body">
         <div class="acm-file-type">${typeLabel}</div>
-        <div class="acm-file-title">${title}</div>
+        ${title ? `<div class="acm-file-title">${title}</div>` : ''}
+        ${time ? `<div class="acm-file-time">生成于 ${time}</div>` : ''}
+        <a class="acm-image-link" href="${safeUrl}" target="_blank" rel="noopener">
+          <img class="acm-image-preview" src="${safeUrl}" alt="${alt}" loading="lazy" referrerpolicy="no-referrer" />
+        </a>
+        <button type="button" class="acm-file-open action-btn">打开原始对话</button>
+      </div>
+    </div>`;
+  }
+
+  return `
+    <div class="acm-file-card">
+      <div class="acm-file-icon" aria-hidden="true">${isImage ? '🖼️' : '📄'}</div>
+      <div class="acm-file-body">
+        <div class="acm-file-type">${typeLabel}</div>
+        ${title ? `<div class="acm-file-title">${title}</div>` : ''}
         ${time ? `<div class="acm-file-time">生成于 ${time}</div>` : ''}
         <div class="acm-file-hint">侧栏无法打开交互卡片，请在原对话中查看完整内容</div>
         <button type="button" class="acm-file-open action-btn">打开原始对话</button>
@@ -783,25 +1307,35 @@ function bindEvents() {
     });
   });
 
-  $('#export-json-btn').addEventListener('click', async () => {
-    const btn = $('#export-json-btn');
+  async function exportJsonBackup(triggerBtn) {
+    const btn = triggerBtn || $('#export-json-btn');
+    if (!btn) return;
     const origHtml = btn.innerHTML;
+    const isWarn = btn.id === 'export-json-warn-btn';
     btn.disabled = true;
-    btn.innerHTML = `
+    if (isWarn) {
+      btn.textContent = '导出中...';
+    } else {
+      btn.innerHTML = `
       <span class="data-action-icon" aria-hidden="true">…</span>
       <span class="data-action-copy">
         <span class="data-action-title">导出中...</span>
         <span class="data-action-desc">请稍候</span>
       </span>`;
+    }
     try {
       const res = await sendMessage({ type: 'EXPORT_CONVERSATIONS', format: 'json' });
       if (res.success) showToast('JSON 备份已导出');
       else showToast(res.error || '导出失败');
     } finally {
       btn.disabled = false;
-      btn.innerHTML = origHtml;
+      if (isWarn) btn.textContent = '立即导出 JSON 备份';
+      else btn.innerHTML = origHtml;
     }
-  });
+  }
+
+  $('#export-json-btn').addEventListener('click', () => exportJsonBackup($('#export-json-btn')));
+  $('#export-json-warn-btn')?.addEventListener('click', () => exportJsonBackup($('#export-json-warn-btn')));
 
   let pendingImportMode = 'merge';
 
@@ -956,12 +1490,20 @@ async function refreshDetailIfMatching(saved) {
 }
 
 function listenForUpdates() {
+  let lastAutoToastAt = 0;
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'CONVERSATION_SAVED') {
       loadConversations();
       updateStorageUsage();
       refreshDetailIfMatching(message.data);
-      if (message.auto) showToast('对话已自动保存');
+      if (message.auto) {
+        // 短时间多次自动保存只提示一次（流式过程中 DOM/API 会连续触发）
+        const now = Date.now();
+        if (now - lastAutoToastAt > 4000) {
+          lastAutoToastAt = now;
+          showToast('对话已自动保存');
+        }
+      }
     }
   });
 

@@ -1,12 +1,14 @@
 /**
- * 豆包适配器：仅通过官方 API 保存（与 DeepSeek 一致，不做 DOM 兜底）
- * 自动保存：流式结束 / 历史 Hook / URL 变化 / 定时巡检 → API 拉取（带重试）
+ * 豆包适配器：官方 API 为主；页面 DOM 仅在 API 正文扁平无格式时补全 Markdown
+ * 自动保存：流式结束 / 历史 Hook / URL 变化 / 定时巡检 → 强制拉新 API（带重试）
  */
 const DOUBAO_SELECTORS = {
   breakButton: '[data-testid="chat_input_local_break_button"]',
   sendButton: '[data-testid="chat_input_send_button"]',
   chatContainer:
-    '[class*="message-list-"], .container-PvPoAn, .scroll-view-OEiNXD, [data-testid="message-list"], main, [class*="chat"]'
+    '[class*="message-list-"], .container-PvPoAn, .scroll-view-OEiNXD, [data-testid="message-list"], main, [class*="chat"]',
+  assistantMarkdown:
+    '[class*="markdown-body"], [class*="container-markdown"], [class*="message-content"], [data-testid="message_text_content"], [class*="receive"] [class*="markdown"]'
 };
 
 class DoubaoAdapter extends BaseAdapter {
@@ -23,6 +25,7 @@ class DoubaoAdapter extends BaseAdapter {
     this._lastPath = location.pathname;
     this._onHistory = null;
     this._onMessage = null;
+    this._forceRefreshOnce = false;
   }
 
   getPlatformName() {
@@ -56,7 +59,7 @@ class DoubaoAdapter extends BaseAdapter {
     };
   }
 
-  async parseConversationAsync() {
+  async parseConversationAsync(options = {}) {
     // 自动保存路径允许在“刚结束”时拉取；仅手动保存时严格拦截流式
     if (this._isStreaming() && !this._allowFetchWhileSettling) {
       return { error: 'AI正在回答中，请等待完成后再保存' };
@@ -76,11 +79,15 @@ class DoubaoAdapter extends BaseAdapter {
       return { error: '豆包 API 模块未加载，请刷新页面（F5）后重试' };
     }
 
+    const forceRefresh = !!(options.forceRefresh || this._forceRefreshOnce);
+    this._forceRefreshOnce = false;
+
     try {
-      const apiData = await fetchDoubaoConversation(conversationId);
+      const apiData = await fetchDoubaoConversation(conversationId, { forceRefresh });
       if (apiData?.messages?.length) {
-        console.log('[ACM Doubao] API 原文', apiData.messages.length, '条');
-        return this._buildResult(apiData.messages, null, {
+        const messages = this._enrichMessagesFromDom(apiData.messages);
+        console.log('[ACM Doubao] API 原文', messages.length, '条', forceRefresh ? '(force)' : '');
+        return this._buildResult(messages, null, {
           source: 'api',
           sessionId: conversationId
         });
@@ -95,6 +102,138 @@ class DoubaoAdapter extends BaseAdapter {
     return {
       error: '豆包 API 未返回对话内容，请确认已登录、对话页已加载完成后再保存'
     };
+  }
+
+  /**
+   * API 常返回无换行/无 Markdown 的扁平正文；用「对应轮次」页面节点补格式与文件卡
+   * 注意：禁止把整页附件挂到最后一轮（会串轮）
+   */
+  _enrichMessagesFromDom(messages) {
+    if (!Array.isArray(messages) || !messages.length) return messages;
+    if (typeof extractMarkdownFromElement !== 'function') return messages;
+
+    const apiAssistants = messages.filter((m) => m.role === 'assistant');
+    if (!apiAssistants.length) return messages;
+
+    const needTextEnrich = apiAssistants.some((m) => this._looksFlatAssistantText(m.content));
+    const needFileEnrich = apiAssistants.some((m) => !/@@ACM_FILE:/.test(String(m.content || '')));
+    if (!needTextEnrich && !needFileEnrich) return messages;
+
+    const domAssistants = this._extractAssistantDomMarkdowns();
+    if (!domAssistants.length) return messages;
+
+    // 助手条数对不齐时宁可不补，避免串轮（多轮附件错挂）
+    const alignOk = domAssistants.length === apiAssistants.length;
+    if (!alignOk && apiAssistants.length > 1) {
+      console.warn(
+        '[ACM Doubao] DOM 助手条数与 API 不一致，跳过 DOM 补全',
+        domAssistants.length,
+        apiAssistants.length
+      );
+      return messages;
+    }
+
+    let domIdx = 0;
+    return messages.map((m) => {
+      if (m.role !== 'assistant') return m;
+      let content = String(m.content || '');
+      const domText = domAssistants[domIdx++] || '';
+      if (!domText) return m;
+
+      if (this._looksFlatAssistantText(content)) {
+        if (this._textRichness(domText) > this._textRichness(content)) {
+          const aLen = content.replace(/\s+/g, '').length;
+          const dLen = domText.replace(/\s+/g, '').length;
+          let ok = true;
+          if (aLen > 40 && dLen > 40) {
+            const ratio = Math.min(aLen, dLen) / Math.max(aLen, dLen);
+            if (ratio < 0.55) ok = false;
+          }
+          if (ok) content = domText;
+        }
+      }
+
+      // 仅用「本轮」DOM 正文里的文件卡补全
+      if (
+        !/@@ACM_FILE:/.test(content) &&
+        !/!\[[^\]]*\]\(https?:/.test(content) &&
+        /@@ACM_FILE:/.test(domText)
+      ) {
+        const fromDom = (
+          domText.match(/@@ACM_FILE:\{[\s\S]*?\}@@[\s\S]*?(?=\n\n@@ACM_FILE:|$)/g) || []
+        ).join('\n\n');
+        if (fromDom) content = content ? `${content}\n\n${fromDom}` : fromDom;
+      }
+
+      return content === m.content ? m : { ...m, content };
+    });
+  }
+
+  _looksFlatAssistantText(text) {
+    const t = String(text || '').trim();
+    if (!t) return true;
+    const newlines = (t.match(/\n/g) || []).length;
+    const mdMarks = (t.match(/\*\*|__|^#{1,6}\s|^(\d+\.|[-*+])\s|```/gm) || []).length;
+    if (newlines >= 3 || mdMarks >= 2) return false;
+    // 长文几乎无结构 → 视为扁平
+    return t.length > 120 && newlines < 2;
+  }
+
+  _textRichness(text) {
+    if (typeof scoreDoubaoTextRichness === 'function') {
+      return scoreDoubaoTextRichness(text);
+    }
+    return String(text || '').length;
+  }
+
+  _extractAssistantDomMarkdowns() {
+    const roots = [];
+    const seen = new Set();
+
+    const push = (el) => {
+      if (!el || seen.has(el)) return;
+      // 跳过用户气泡
+      if (
+        el.closest?.(
+          '[class*="bg-g-send-msg-bubble"], [data-testid="send_message"], [data-testid="user_message"]'
+        )
+      ) {
+        return;
+      }
+      seen.add(el);
+      roots.push(el);
+    };
+
+    document.querySelectorAll(DOUBAO_SELECTORS.assistantMarkdown).forEach((el) => {
+      // 取较完整的内容容器，避免只抓到一行 span
+      const host =
+        el.closest(
+          '[data-testid="message_text_content"], [class*="message-content"], [class*="markdown"]'
+        ) || el;
+      push(host);
+    });
+
+    // 兜底：整页非用户气泡的大段正文块
+    if (!roots.length) {
+      document
+        .querySelectorAll('[data-testid="message_text_content"], [class*="message-content"]')
+        .forEach((el) => push(el));
+    }
+
+    const out = [];
+    for (const el of roots) {
+      try {
+        const md = extractMarkdownFromElement(el);
+        const cleaned =
+          typeof sanitizeAssistantContentForSave === 'function'
+            ? sanitizeAssistantContentForSave(md)
+            : md;
+        if (cleaned && cleaned.replace(/\s+/g, '').length > 0) out.push(cleaned.trim());
+      } catch {
+        // ignore
+      }
+    }
+    return out;
   }
 
   onConversationUpdate(callback) {
@@ -128,6 +267,12 @@ class DoubaoAdapter extends BaseAdapter {
     this._streamPollTimer = setInterval(() => {
       const streaming = this._isStreaming();
       if (this._wasStreaming && !streaming) {
+        this._forceRefreshOnce = true;
+        if (typeof invalidateDoubaoCache === 'function') {
+          const id =
+            typeof getDoubaoConversationId === 'function' ? getDoubaoConversationId() : null;
+          invalidateDoubaoCache(id);
+        }
         this._queueAutoSave('stream-end');
       } else if (!this._wasStreaming && streaming) {
         console.log('[ACM Doubao] 检测到生成中');
@@ -141,15 +286,17 @@ class DoubaoAdapter extends BaseAdapter {
       if (path === this._lastPath) return;
       this._lastPath = path;
       if (/\/chat\/[0-9a-zA-Z_-]{8,}/.test(path)) {
+        this._forceRefreshOnce = true;
         this._queueAutoSave('url-change');
       }
     }, 800);
 
-    // 兜底巡检：有对话 ID 且空闲时周期性尝试（指纹去重，不会刷屏）
+    // 兜底巡检：有对话 ID 且空闲时周期性强制拉新（指纹去重，不会刷屏）
     this._idlePollTimer = setInterval(() => {
       if (!this._updateCallback) return;
       if (this._isStreaming()) return;
       if (!this.hasConversation()) return;
+      this._forceRefreshOnce = true;
       this._queueAutoSave('idle-poll');
     }, 4000);
   }
@@ -158,7 +305,7 @@ class DoubaoAdapter extends BaseAdapter {
     if (!this._updateCallback) return;
     clearTimeout(this._autoSaveTimer);
     const delay =
-      reason === 'stream-end' ? 2000 : reason === 'idle-poll' ? 400 : 1000;
+      reason === 'stream-end' ? 1500 : reason === 'idle-poll' ? 400 : 1000;
     this._autoSaveTimer = setTimeout(() => {
       this._runAutoSave(reason, 0);
     }, delay);
@@ -200,10 +347,15 @@ class DoubaoAdapter extends BaseAdapter {
 
     this._autoSaveInFlight = true;
     this._allowFetchWhileSettling = true;
+    const forceRefresh =
+      reason === 'stream-end' ||
+      reason === 'idle-poll' ||
+      reason === 'url-change' ||
+      attempt > 0;
     try {
-      const data = await this.parseConversationAsync();
+      const data = await this.parseConversationAsync({ forceRefresh });
       if (data?.error || !data?.messages?.length) {
-        if (attempt < 8) {
+        if (attempt < 10) {
           console.warn(
             '[ACM Doubao] 自动保存重试',
             reason,
@@ -213,8 +365,9 @@ class DoubaoAdapter extends BaseAdapter {
           this._autoSaveTimer = setTimeout(() => {
             this._autoSaveInFlight = false;
             this._allowFetchWhileSettling = false;
+            this._forceRefreshOnce = true;
             this._runAutoSave(reason, attempt + 1);
-          }, 1000 + attempt * 400);
+          }, 900 + attempt * 350);
           return;
         }
         console.warn('[ACM Doubao] 自动保存放弃:', reason, data?.error || 'empty');
@@ -222,6 +375,22 @@ class DoubaoAdapter extends BaseAdapter {
       }
 
       const last = data.messages[data.messages.length - 1];
+      // 流式刚结束时若末条仍是用户，说明服务端历史未落库，继续重试
+      if (
+        (reason === 'stream-end' || reason === 'idle-poll') &&
+        last?.role !== 'assistant' &&
+        attempt < 12
+      ) {
+        console.warn('[ACM Doubao] 末轮助手未就绪，重试', reason, attempt + 1);
+        this._autoSaveTimer = setTimeout(() => {
+          this._autoSaveInFlight = false;
+          this._allowFetchWhileSettling = false;
+          this._forceRefreshOnce = true;
+          this._runAutoSave(reason, attempt + 1);
+        }, 1000 + attempt * 400);
+        return;
+      }
+
       const fp = [
         data.sessionId || conversationId,
         data.messages.length,
@@ -244,6 +413,7 @@ class DoubaoAdapter extends BaseAdapter {
         this._autoSaveTimer = setTimeout(() => {
           this._autoSaveInFlight = false;
           this._allowFetchWhileSettling = false;
+          this._forceRefreshOnce = true;
           this._runAutoSave(reason, attempt + 1);
         }, 1500);
         return;

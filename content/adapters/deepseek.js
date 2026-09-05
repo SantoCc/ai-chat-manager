@@ -27,8 +27,8 @@ class DeepSeekAdapter extends BaseAdapter {
 
   hasConversation() {
     const sessionId =
-      (typeof getDeepSeekSessionId === 'function' ? getDeepSeekSessionId() : null) ||
-      this._sessionId;
+      typeof getDeepSeekSessionId === 'function' ? getDeepSeekSessionId() : null;
+    if (sessionId) this._sessionId = sessionId;
     return !!sessionId && !/\/sign_in/i.test(location.pathname);
   }
 
@@ -48,14 +48,14 @@ class DeepSeekAdapter extends BaseAdapter {
       return { error: 'AI正在回答中，请等待完成后再保存' };
     }
 
+    // 只用 URL 上的实时 session，禁止回退旧 _sessionId（新对话页会串成「未命名」脏记录）
     const sessionId =
-      (typeof getDeepSeekSessionId === 'function' ? getDeepSeekSessionId() : null) ||
-      this._sessionId;
+      typeof getDeepSeekSessionId === 'function' ? getDeepSeekSessionId() : null;
+    if (sessionId) this._sessionId = sessionId;
+    else this._sessionId = null;
 
     if (!sessionId) {
-      return {
-        error: '未识别对话 ID，请在 DeepSeek 对话页（/a/chat/s/...）打开后再保存'
-      };
+      return { error: '没有可保存的对话内容' };
     }
 
     if (typeof fetchDeepSeekConversation !== 'function') {
@@ -66,7 +66,19 @@ class DeepSeekAdapter extends BaseAdapter {
       const apiData = await fetchDeepSeekConversation(sessionId);
       if (apiData?.messages?.length) {
         console.log('[ACM DeepSeek] API 原文', apiData.messages.length, '条');
-        return this._buildResult(apiData.messages, null, { source: 'api', sessionId });
+        const titleFromUser = (() => {
+          const u = apiData.messages.find((m) => m.role === 'user');
+          if (!u) return null;
+          const t = String(u.content || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (!t) return null;
+          return t.slice(0, 40) + (t.length > 40 ? '…' : '');
+        })();
+        return this._buildResult(apiData.messages, titleFromUser, {
+          source: 'api',
+          sessionId
+        });
       }
     } catch (err) {
       console.error('[ACM DeepSeek] API 获取失败:', err);
@@ -75,9 +87,7 @@ class DeepSeekAdapter extends BaseAdapter {
       };
     }
 
-    return {
-      error: 'DeepSeek API 未返回对话内容，请确认已登录、页面已加载完成后再保存'
-    };
+    return { error: '没有可保存的对话内容' };
   }
 
   _getUserMessageElements() {

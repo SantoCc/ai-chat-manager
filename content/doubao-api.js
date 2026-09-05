@@ -1,6 +1,6 @@
 /**
  * 豆包官方接口读取对话原文
- * 三级兜底（不用 DOM）：Hook 缓存 → MAIN 世界 fetch → CS IM/alice
+ * 三级兜底：MAIN 世界 fetch → CS IM/alice → Hook 缓存（缓存仅作失败兜底，避免末轮延迟）
  */
 const DOUBAO_USER_TYPE = {
   UNKNOWN: 0,
@@ -93,15 +93,47 @@ function buildDoubaoCommonParams() {
   return params;
 }
 
-function extractDoubaoText(content) {
-  if (content == null) return '';
+/** 结构化程度：优先选带换行 / Markdown / HTML 的候选，避免扁平 text_block 抢先 */
+function scoreDoubaoTextRichness(text) {
+  const t = String(text || '');
+  if (!t.trim()) return -1;
+  let score = Math.min(t.length, 8000);
+  score += (t.match(/\n/g) || []).length * 28;
+  score += (t.match(/\*\*[^*\n]+\*\*|__[^_\n]+__/g) || []).length * 45;
+  score += (t.match(/^#{1,6}\s/gm) || []).length * 55;
+  score += (t.match(/^(\d+\.|[-*+])\s/gm) || []).length * 32;
+  score += (t.match(/<\/?(h[1-6]|p|li|ul|ol|strong|em|pre|code|blockquote|br)\b/gi) || [])
+    .length * 40;
+  // 超长单行墙文降权（常见于丢格式后的 brief / plain）
+  if (!/\n/.test(t) && t.length > 180) score -= 120;
+  return score;
+}
+
+function pickRichestDoubaoText(candidates, depth = 0) {
+  let best = '';
+  let bestScore = -1;
+  for (const raw of candidates) {
+    if (raw == null || raw === '') continue;
+    const t = extractDoubaoText(raw, depth + 1);
+    if (!t) continue;
+    const score = scoreDoubaoTextRichness(t);
+    if (score > bestScore) {
+      best = t;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function extractDoubaoText(content, depth = 0) {
+  if (content == null || depth > 10) return '';
 
   // content_blocks / content_blocks_v2 直接是数组
   if (Array.isArray(content)) {
     return content
-      .map((b) => extractDoubaoBlock(b))
+      .map((b) => extractDoubaoBlock(b, depth + 1))
       .filter(Boolean)
-      .join('\n')
+      .join('\n\n')
       .trim();
   }
 
@@ -119,7 +151,7 @@ function extractDoubaoText(content) {
       (trimmed.startsWith('[') && trimmed.endsWith(']'))
     ) {
       try {
-        return extractDoubaoText(JSON.parse(trimmed));
+        return extractDoubaoText(JSON.parse(trimmed), depth + 1);
       } catch {
         return trimmed;
       }
@@ -128,50 +160,33 @@ function extractDoubaoText(content) {
   }
   if (typeof content !== 'object') return String(content).trim();
 
-  // text_block: { text: "..." }
-  if (content.text_block && typeof content.text_block === 'object') {
-    const t = extractDoubaoText(content.text_block);
-    if (t) return t;
-  }
-
-  if (typeof content.text === 'string' && content.text.trim()) {
-    return content.text.trim();
-  }
-  if (typeof content.content === 'string') {
-    const t = extractDoubaoText(content.content);
-    if (t) return t;
-  }
-  if (content.content && typeof content.content === 'object') {
-    const t = extractDoubaoText(content.content);
-    if (t) return t;
-  }
-  if (typeof content.rich_text === 'string') {
-    const t = extractDoubaoText(content.rich_text);
-    if (t) return t;
-  }
-  if (content.delta && typeof content.delta.text === 'string') {
-    return content.delta.text.trim();
-  }
-  if (Array.isArray(content.parts)) {
-    return content.parts
-      .map((p) => (typeof p === 'string' ? p : extractDoubaoText(p)))
-      .filter(Boolean)
-      .join('')
-      .trim();
-  }
-
-  const blocks =
-    content.content_blocks ||
-    content.content_blocks_v2 ||
-    content.blocks ||
-    content.block_list;
-  if (Array.isArray(blocks)) {
-    return blocks
-      .map((b) => extractDoubaoBlock(b))
-      .filter(Boolean)
-      .join('\n')
-      .trim();
-  }
+  // 同层多字段：取结构最丰富的一份（勿被扁平 text 抢先）
+  const layered = pickRichestDoubaoText(
+    [
+      content.markdown,
+      content.md,
+      content.html,
+      content.rich_text,
+      content.richText,
+      content.display_html,
+      content.formatted_text,
+      content.text_block?.markdown,
+      content.text_block?.html,
+      content.text_block?.rich_text,
+      content.text_block?.text,
+      typeof content.text === 'string' ? content.text : null,
+      typeof content.content === 'string' ? content.content : null,
+      content.content && typeof content.content === 'object' ? content.content : null,
+      content.delta?.text,
+      Array.isArray(content.parts) ? content.parts : null,
+      content.content_blocks_v2,
+      content.content_blocks,
+      content.blocks,
+      content.block_list
+    ],
+    depth
+  );
+  if (layered) return layered;
 
   return '';
 }
@@ -192,60 +207,277 @@ function getDoubaoBlockKind(block) {
 const DOUBAO_SKIP_BLOCK_KINDS =
   /^(suggest|suggestion|feedback|loading|divider|separator|hint|toast|banner)$/i;
 const DOUBAO_FILE_BLOCK_KINDS =
-  /^(image|img|video|audio|file|attachment|card|widget|document|doc|ppt|pdf|artifact|canvas|code_file|spreadsheet|excel|zip)$/i;
+  /^(image|img|video|audio|file|attachment|card|widget|document|doc|ppt|pdf|artifact|canvas|code_file|spreadsheet|excel|zip|sheet|bitable|lark|feishu)$/i;
+/** 豆包数字 block_type：附件 / 生成文档 / 图片视频 */
+const DOUBAO_FILE_BLOCK_TYPE_IDS = new Set([
+  '10052', // attachment_block
+  '10054',
+  '10055',
+  '10056',
+  '10100',
+  '10110',
+  '2009', // SamanthaImageInput
+  '2010', // SamanthaImageOutput
+  '2020', // video in
+  '2021' // video out
+]);
+
+function resolveDoubaoMediaUrl(node) {
+  if (!node || typeof node !== 'object') {
+    if (typeof node === 'string' && /^(https?:|data:image\/)/i.test(node)) return node;
+    return '';
+  }
+  const nested =
+    typeof node.image_url === 'object' && node.image_url
+      ? node.image_url.url || node.image_url.src || ''
+      : typeof node.image_url === 'string'
+        ? node.image_url
+        : '';
+  const candidates = [
+    node.url,
+    nested,
+    node.src,
+    node.preview_url,
+    node.download_url,
+    node.file_url,
+    node.origin_url,
+    node.ori_url,
+    node.thumbnail_url,
+    node.thumb_url,
+    node.link,
+    typeof node.image === 'string' ? node.image : null,
+    typeof node.image === 'object' ? resolveDoubaoMediaUrl(node.image) : null
+  ];
+  for (const u of candidates) {
+    if (typeof u === 'string' && /^(https?:|data:image\/)/i.test(u.trim())) return u.trim();
+  }
+  return '';
+}
+
+function getDoubaoBlockTypeId(block) {
+  if (!block || typeof block !== 'object') return '';
+  const raw =
+    block.block_type ??
+    block.type ??
+    block.content_type ??
+    block.content?.block_type ??
+    block.content?.type;
+  if (raw == null || raw === '') return '';
+  return String(raw);
+}
 
 function looksLikeDoubaoFileBlock(block) {
   if (!block || typeof block !== 'object') return false;
   const kind = getDoubaoBlockKind(block);
   if (DOUBAO_FILE_BLOCK_KINDS.test(kind)) return true;
-  if (block.file_info || block.file || block.attachment || block.image_url || block.video_url) {
+  if (DOUBAO_FILE_BLOCK_TYPE_IDS.has(getDoubaoBlockTypeId(block))) return true;
+
+  const hasVal = (v) => {
+    if (v == null || v === '') return false;
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === 'object') return Object.keys(v).length > 0;
+    return true;
+  };
+
+  if (
+    hasVal(block.file_info) ||
+    hasVal(block.file) ||
+    hasVal(block.attachment) ||
+    block.image_url ||
+    block.video_url ||
+    hasVal(block.image_block) ||
+    hasVal(block.image) ||
+    hasVal(block.images)
+  ) {
     return true;
   }
-  if (block.content?.file_info || block.content?.image || block.content?.video) return true;
+  if (
+    hasVal(block.attachment_block) ||
+    hasVal(block.attachments) ||
+    hasVal(block.file_card) ||
+    hasVal(block.artifact_block)
+  ) {
+    return true;
+  }
+
+  const c = block.content;
+  if (c && typeof c === 'object' && !Array.isArray(c)) {
+    if (
+      hasVal(c.file_info) ||
+      hasVal(c.file) ||
+      hasVal(c.image) ||
+      hasVal(c.images) ||
+      hasVal(c.image_block) ||
+      hasVal(c.image_url) ||
+      hasVal(c.video) ||
+      hasVal(c.video_block) ||
+      hasVal(c.attachment_block) ||
+      hasVal(c.attachments) ||
+      hasVal(c.file_card) ||
+      hasVal(c.artifact_block) ||
+      hasVal(c.sheet_block) ||
+      hasVal(c.spreadsheet) ||
+      hasVal(c.bitable) ||
+      hasVal(c.lark_file) ||
+      hasVal(c.feishu_file) ||
+      hasVal(c.doc_block) ||
+      hasVal(c.document_block)
+    ) {
+      return true;
+    }
+  }
+
+  // 启发式：块 JSON 像附件/飞书表/图片，且不是纯文本块
+  try {
+    const blob = JSON.stringify(block).slice(0, 2500);
+    if (
+      /attachment_block|"attachments"\s*:|image_block|"image_url"|tos-cn-i-|spreadsheet|bitable|feishu\.cn|larksuite\.com|file_url|download_url|byteimg\.com|imagex/i.test(
+        blob
+      ) &&
+      /"name"|"title"|"file_name"|"filename"|"display_name"|"url"|"src"/i.test(blob)
+    ) {
+      return true;
+    }
+  } catch {
+    // ignore
+  }
   return false;
 }
 
-function formatDoubaoFileBlock(block) {
-  const kind = getDoubaoBlockKind(block) || 'generated_file';
-  const src =
-    block.file_info ||
-    block.file ||
-    block.attachment ||
-    block.content?.file_info ||
-    block.content?.file ||
-    block.content ||
-    block;
-  let title =
-    src?.title ||
-    src?.name ||
-    src?.file_name ||
-    src?.filename ||
-    src?.display_name ||
-    block.title ||
-    block.name ||
+function digDoubaoFileMeta(node, depth = 0, out = []) {
+  if (!node || depth > 6) return out;
+  if (Array.isArray(node)) {
+    for (const item of node) digDoubaoFileMeta(item, depth + 1, out);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+
+  const title =
+    node.title ||
+    node.name ||
+    node.file_name ||
+    node.filename ||
+    node.display_name ||
+    node.doc_name ||
+    node.sheet_name ||
+    node.alt ||
     '';
-  if (!title) {
-    if (/image|img/.test(kind)) title = '图片';
-    else if (/video/.test(kind)) title = '视频';
-    else if (/ppt|演示/.test(kind)) title = '演示文稿';
-    else if (/pdf|doc/.test(kind)) title = '文档';
-    else title = '生成文件';
+  const generatedAt =
+    node.created_at ||
+    node.create_time ||
+    node.generated_at ||
+    node.generate_time ||
+    node.update_time ||
+    '';
+  const url = resolveDoubaoMediaUrl(node);
+
+  const typeHint = String(
+    node.type ?? node.file_type ?? node.content_type ?? node.mime_type ?? ''
+  ).toLowerCase();
+  // attachment type: 1=image, 3=file（豆包约定）
+  const isImageAtt = typeHint === '1' || typeHint === 'image' || typeHint === 'img';
+
+  if (title || url || isImageAtt) {
+    let type = 'generated_file';
+    const hint = `${title} ${typeHint} ${url}`.toLowerCase();
+    if (isImageAtt || /image|img|png|jpe?g|gif|webp|bmp|svg/.test(hint)) type = 'image';
+    else if (/sheet|excel|xls|csv|表格|spreadsheet|bitable/.test(hint)) type = 'spreadsheet';
+    else if (/ppt|幻灯|演示/.test(hint)) type = 'presentation';
+    else if (/pdf|doc|docx|文档/.test(hint)) type = 'document';
+    else if (/video|mp4|webm/.test(hint)) type = 'video';
+    else if (/attachment|file/.test(hint)) type = 'file';
+
+    let timeStr = '';
+    if (generatedAt != null && generatedAt !== '') {
+      const n = Number(generatedAt);
+      if (!Number.isNaN(n) && n > 1e11) {
+        const d = new Date(n);
+        timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      } else if (!Number.isNaN(n) && n > 1e9) {
+        const d = new Date(n * 1000);
+        timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      } else {
+        timeStr = String(generatedAt).slice(0, 32);
+      }
+    }
+
+    out.push({
+      kind: 'file',
+      type,
+      title: String(title || (type === 'image' ? '图片' : '生成文件')).slice(0, 80),
+      generatedAt: timeStr,
+      url: url || ''
+    });
   }
-  const meta = {
-    kind: 'file',
-    type: kind || 'generated_file',
-    title: String(title).slice(0, 80),
-    generatedAt: ''
-  };
-  if (typeof formatGeneratedFileCardsMarkdown === 'function') {
-    return formatGeneratedFileCardsMarkdown([meta]);
+
+  for (const key of [
+    'attachment_block',
+    'attachments',
+    'file',
+    'file_info',
+    'files',
+    'artifact_block',
+    'file_card',
+    'sheet_block',
+    'spreadsheet',
+    'bitable',
+    'doc_block',
+    'document_block',
+    'image_block',
+    'image',
+    'images',
+    'image_list',
+    'image_url',
+    'video_block',
+    'video',
+    'content',
+    'payload',
+    'data'
+  ]) {
+    if (node[key] != null) digDoubaoFileMeta(node[key], depth + 1, out);
   }
-  return `📎 **${meta.title}**`;
+  return out;
 }
 
-function extractDoubaoBlock(block) {
-  if (block == null) return '';
-  if (typeof block === 'string') return extractDoubaoText(block);
+function formatDoubaoFileBlock(block) {
+  const metas = digDoubaoFileMeta(block);
+  const seen = new Set();
+  const cards = [];
+  for (const m of metas) {
+    const key = `${m.title}::${m.type}::${m.url || m.generatedAt}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cards.push(m);
+  }
+
+  if (!cards.length) {
+    if (!looksLikeDoubaoFileBlock(block)) return '';
+    const kind = getDoubaoBlockKind(block) || getDoubaoBlockTypeId(block) || 'generated_file';
+    let title = '生成文件';
+    let type = kind || 'generated_file';
+    if (/^(2009|2010)$/.test(String(kind)) || /image|img/.test(String(kind))) {
+      title = '图片';
+      type = 'image';
+    } else if (/video/.test(String(kind)) || /^(2020|2021)$/.test(String(kind))) {
+      title = '视频';
+      type = 'video';
+    } else if (/ppt|演示/.test(String(kind))) title = '演示文稿';
+    else if (/sheet|excel|spreadsheet|表格/.test(String(kind))) {
+      title = '表格';
+      type = 'spreadsheet';
+    } else if (/pdf|doc/.test(String(kind))) title = '文档';
+    cards.push({ kind: 'file', type, title, generatedAt: '', url: '' });
+  }
+
+  if (typeof formatGeneratedFileCardsMarkdown === 'function') {
+    return formatGeneratedFileCardsMarkdown(cards);
+  }
+  return cards.map((c) => `📎 **${c.title}**`).join('\n\n');
+}
+
+function extractDoubaoBlock(block, depth = 0) {
+  if (block == null || depth > 10) return '';
+  if (typeof block === 'string') return extractDoubaoText(block, depth + 1);
   if (typeof block !== 'object') return String(block).trim();
 
   const kind = getDoubaoBlockKind(block);
@@ -265,39 +497,24 @@ function extractDoubaoBlock(block) {
     return filePart || textPart;
   }
 
-  // 跳过纯建议/附件等非正文块（仍尽量抽文本）
-  const fromTextBlock =
-    block.content?.text_block?.text ||
-    block.text_block?.text ||
-    block.content_obj?.text_block?.text;
-  if (typeof fromTextBlock === 'string' && fromTextBlock.trim()) {
-    return fromTextBlock.trim();
-  }
-
-  if (typeof block.text === 'string' && block.text.trim()) return block.text.trim();
-
-  // block.content 可能是对象 { text_block: { text } }
-  if (block.content != null) {
-    const t = extractDoubaoText(block.content);
-    if (t) return t;
-  }
-  if (block.content_obj != null) {
-    const t = extractDoubaoText(block.content_obj);
-    if (t) return t;
-  }
-  if (block.content_block != null) {
-    const t = extractDoubaoText(block.content_block);
-    if (t) return t;
-  }
-  if (block.payload != null) {
-    const t = extractDoubaoText(block.payload);
-    if (t) return t;
-  }
-  if (block.data != null) {
-    const t = extractDoubaoText(block.data);
-    if (t) return t;
-  }
-  return '';
+  // 块内多字段择优（含 markdown/html），避免只取扁平 text
+  return pickRichestDoubaoText(
+    [
+      block.content?.text_block,
+      block.text_block,
+      block.content_obj?.text_block,
+      block.markdown,
+      block.html,
+      block.rich_text,
+      block.text,
+      block.content,
+      block.content_obj,
+      block.content_block,
+      block.payload,
+      block.data
+    ],
+    depth
+  );
 }
 
 function normalizeDoubaoRole(msg) {
@@ -426,15 +643,53 @@ function parseDoubaoHistoryPayload(payload) {
       continue;
     }
 
-    const content =
-      extractDoubaoText(msg.content_blocks_v2) ||
-      extractDoubaoText(msg.content_blocks) ||
-      extractDoubaoText(msg.content) ||
-      extractDoubaoText(msg.display_content) ||
-      extractDoubaoText(msg.text) ||
-      extractDoubaoText(msg.brief) ||
-      extractDoubaoText(msg.content_block) ||
-      extractDoubaoText(msg.content_obj);
+    // 多字段择优：content_blocks 的 plain text 常丢标题/加粗，HTML/markdown 更完整
+    let content = pickRichestDoubaoText([
+      msg.content_blocks_v2,
+      msg.content_blocks,
+      msg.content,
+      msg.display_content,
+      msg.display_html,
+      msg.markdown,
+      msg.html,
+      msg.rich_text,
+      msg.text,
+      msg.brief,
+      msg.content_block,
+      msg.content_obj
+    ]);
+
+    // 消息级附件 / 生成文件（可能不在 content_blocks 文本里）
+    const fileBits = [];
+    for (const node of [
+      msg.attachments,
+      msg.files,
+      msg.file_list,
+      msg.artifacts,
+      msg.cards,
+      msg.attachment_block,
+      msg.file_card
+    ]) {
+      if (node == null || (Array.isArray(node) && !node.length)) continue;
+      const wrap = { content: node, attachment_block: node };
+      if (!looksLikeDoubaoFileBlock(wrap) && !looksLikeDoubaoFileBlock(node)) continue;
+      const bit = formatDoubaoFileBlock(wrap);
+      if (bit && !fileBits.includes(bit)) fileBits.push(bit);
+    }
+    // 块数组里再扫一遍附件块（防止被 skip / 扁平文本路径丢掉）
+    const blockArrays = [msg.content_blocks_v2, msg.content_blocks, msg.blocks].filter(Array.isArray);
+    for (const arr of blockArrays) {
+      for (const b of arr) {
+        if (!looksLikeDoubaoFileBlock(b)) continue;
+        const bit = formatDoubaoFileBlock(b);
+        if (bit && !fileBits.includes(bit)) fileBits.push(bit);
+      }
+    }
+    if (fileBits.length) {
+      const joined = fileBits.join('\n\n');
+      if (!content) content = joined;
+      else if (!/@@ACM_FILE:/.test(content)) content = `${content}\n\n${joined}`;
+    }
 
     if (!content) {
       skippedNoContent += 1;
@@ -523,15 +778,24 @@ function rememberDoubaoPayload(conversationId, payload, url) {
   }
 }
 
-function getCachedDoubaoPayload(conversationId) {
+function invalidateDoubaoCache(conversationId) {
+  if (conversationId) {
+    __acmDoubaoCache.byId.delete(String(conversationId));
+  }
+  __acmDoubaoCache.latest = null;
+}
+
+function getCachedDoubaoPayload(conversationId, maxAgeMs = 10 * 60 * 1000) {
+  const pick = (entry) => {
+    if (!entry?.payload) return null;
+    if (Date.now() - (entry.ts || 0) > maxAgeMs) return null;
+    return entry;
+  };
   if (conversationId && __acmDoubaoCache.byId.has(String(conversationId))) {
-    return __acmDoubaoCache.byId.get(String(conversationId));
+    const hit = pick(__acmDoubaoCache.byId.get(String(conversationId)));
+    if (hit) return hit;
   }
-  // 最近一条且未超时（10 分钟）
-  if (__acmDoubaoCache.latest && Date.now() - __acmDoubaoCache.latest.ts < 10 * 60 * 1000) {
-    return __acmDoubaoCache.latest;
-  }
-  return null;
+  return pick(__acmDoubaoCache.latest);
 }
 
 async function postDoubaoJson(path, body) {
@@ -783,27 +1047,19 @@ async function fetchViaPageImChain(conversationId) {
   throw lastErr || new Error('页面主环境 IM 失败');
 }
 
-async function fetchDoubaoMessageList(conversationId) {
+async function fetchDoubaoMessageList(conversationId, options = {}) {
   injectDoubaoHook();
+  const forceRefresh = !!options.forceRefresh;
 
-  // 1) Hook 缓存
-  const cached = getCachedDoubaoPayload(conversationId);
-  if (cached?.payload) {
-    const messages = parseDoubaoHistoryPayload(cached.payload);
-    if (messages.length) {
-      return { messages, path: `hook-cache:${cached.url || 'history'}`, payload: cached.payload };
-    }
-  }
-
-  // 2) 页面 MAIN 世界 fetch（scripting，最稳；优先于 CS isolated fetch）
+  // 1) 页面 MAIN 世界 fetch（始终优先拉新；避免 Hook 旧缓存卡住末轮）
   try {
-    console.warn('[ACM Doubao] 尝试页面主环境 fetch');
+    console.warn('[ACM Doubao] 尝试页面主环境 fetch', forceRefresh ? '(force)' : '');
     return await fetchViaPageImChain(conversationId);
   } catch (pageErr) {
     console.warn('[ACM Doubao] 页面 fetch 失败:', pageErr);
   }
 
-  // 3) Content Script 主动拉 IM / alice（兜底）
+  // 2) Content Script 主动拉 IM / alice
   try {
     return await fetchViaImChain(conversationId);
   } catch (imErr) {
@@ -815,11 +1071,21 @@ async function fetchDoubaoMessageList(conversationId) {
     }
   }
 
+  // 3) Hook 缓存兜底（force 时仅接受极短窗口内的新鲜缓存）
+  const cacheMaxAge = forceRefresh ? 8000 : 10 * 60 * 1000;
+  const cached = getCachedDoubaoPayload(conversationId, cacheMaxAge);
+  if (cached?.payload) {
+    const messages = parseDoubaoHistoryPayload(cached.payload);
+    if (messages.length) {
+      return { messages, path: `hook-cache:${cached.url || 'history'}`, payload: cached.payload };
+    }
+  }
+
   // 再等一小会儿 Hook 缓存（页面可能刚加载完）
   const start = Date.now();
   while (Date.now() - start < 2500) {
     await new Promise((r) => setTimeout(r, 250));
-    const again = getCachedDoubaoPayload(conversationId);
+    const again = getCachedDoubaoPayload(conversationId, cacheMaxAge);
     if (again?.payload) {
       const messages = parseDoubaoHistoryPayload(again.payload);
       if (messages.length) {
@@ -831,9 +1097,12 @@ async function fetchDoubaoMessageList(conversationId) {
   throw new Error('豆包 API 三级兜底均失败，请确认已登录并刷新对话页');
 }
 
-async function fetchDoubaoConversation(conversationId) {
+async function fetchDoubaoConversation(conversationId, options = {}) {
   if (!conversationId) return null;
-  const { messages, path } = await fetchDoubaoMessageList(conversationId);
+  if (options.forceRefresh && typeof invalidateDoubaoCache === 'function') {
+    invalidateDoubaoCache(conversationId);
+  }
+  const { messages, path } = await fetchDoubaoMessageList(conversationId, options);
   console.log('[ACM Doubao] API 解析', messages.length, '条 via', path);
   return { messages, source: 'api', sessionId: conversationId, fetchSource: path };
 }
@@ -989,14 +1258,8 @@ function injectDoubaoHook() {
   };
 })();`;
 
-  try {
-    const el = document.createElement('script');
-    el.textContent = source;
-    (document.documentElement || document.head || document.body).appendChild(el);
-    el.remove();
-  } catch (err) {
-    console.warn('[ACM Doubao] hook 注入失败', err);
-  }
+  // 禁止内联 script（会触发站点 CSP 红字）。页面 hook 仅由 manifest world:MAIN 注入。
+  void source;
 }
 
 function setupDoubaoCacheListener() {
@@ -1017,4 +1280,6 @@ if (typeof globalThis !== 'undefined') {
   globalThis.getDoubaoConversationId = getDoubaoConversationId;
   globalThis.fetchDoubaoConversation = fetchDoubaoConversation;
   globalThis.parseDoubaoHistoryPayload = parseDoubaoHistoryPayload;
+  globalThis.invalidateDoubaoCache = invalidateDoubaoCache;
+  globalThis.scoreDoubaoTextRichness = scoreDoubaoTextRichness;
 }
