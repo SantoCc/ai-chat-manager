@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "AI对话管理器",
+  "default_locale": "zh_CN",
+  "name": "__MSG_extensionName__",
   "version": "0.1.0",
-  "description": "一键保存、整理、搜索、复用豆包/通义千问/DeepSeek/元宝/Kimi的AI对话记录",
+  "description": "__MSG_extensionDescription__",
   "permissions": ["storage", "unlimitedStorage", "activeTab", "sidePanel", "downloads", "clipboardWrite", "scripting", "tabs"],
   "host_permissions": [
     "*://*.doubao.com/*",

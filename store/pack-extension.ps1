@@ -13,7 +13,7 @@ $outDir = [Environment]::GetFolderPath("Desktop")
 $zipPath = Join-Path $outDir ("ai-chat-manager-edge-{0}.zip" -f $version)
 $stage = Join-Path $env:TEMP ("acm-edge-pack-" + [guid]::NewGuid().ToString("N"))
 
-$includeDirs = @("background", "content", "icons", "lib", "sidepanel", "utils")
+$includeDirs = @("_locales", "background", "content", "icons", "lib", "sidepanel", "utils")
 $includeFiles = @("manifest.json", "LICENSE")
 
 # icons 内排除生成器

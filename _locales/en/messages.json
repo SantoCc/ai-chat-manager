@@ -1,0 +1,10 @@
+{
+  "extensionName": {
+    "message": "AI Chat Manager",
+    "description": "Extension display name"
+  },
+  "extensionDescription": {
+    "message": "Save, organize, search, and reuse AI chats from Doubao, Qianwen, DeepSeek, Yuanbao, and Kimi",
+    "description": "Extension short description for store listing"
+  }
+}
