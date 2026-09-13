@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>隐私政策 · AI对话管理器</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.65; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 1.6rem; }
+    h2 { font-size: 1.15rem; margin-top: 1.6em; }
+    .meta { color: #666; font-size: 0.9rem; }
+    ul { padding-left: 1.2em; }
+  </style>
+</head>
+<body>
+  <h1>AI对话管理器 · 隐私政策</h1>
+  <p class="meta">最后更新：2026-09-13 · 产品：Microsoft Edge / Chrome 扩展「AI对话管理器」v0.1.0</p>
+
+  <h2>1. 概述</h2>
+  <p>「AI对话管理器」（下称「本扩展」）用于在本机保存、整理、搜索与导出用户在豆包、通义千问、DeepSeek、腾讯元宝、Kimi 等 AI 对话页面中的对话内容。我们重视隐私：<strong>对话内容默认仅保存在您的浏览器本地，不会上传到开发者自建服务器。</strong></p>
+
+  <h2>2. 我们收集哪些数据</h2>
+  <ul>
+    <li><strong>对话内容</strong>：您主动保存（或开启自动保存后）的标题、消息正文、平台标识、页面 URL、时间戳、文件夹/收藏等元数据。</li>
+    <li><strong>设置项</strong>：如主题、自动保存、自动分类、存储方案等偏好。</li>
+    <li><strong>导出文件</strong>：仅当您点击导出时，在本机生成 Markdown / JSON 等文件；不会自动上传。</li>
+  </ul>
+  <p>本扩展<strong>不要求</strong>您注册开发者账号，也<strong>不收集</strong>用于广告追踪的跨站标识。</p>
+
+  <h2>3. 数据存储位置与处理方式</h2>
+  <ul>
+    <li>数据存储在浏览器提供的 <code>chrome.storage.local</code>（Edge 兼容同一套扩展存储 API）中，位于您的设备本地。</li>
+    <li>内容脚本仅在您已授权的 AI 站点域名上运行，用于读取当前页面对话以便保存。</li>
+    <li>本扩展当前版本<strong>不</strong>将对话内容发送至开发者运营的远程服务器。</li>
+  </ul>
+
+  <h2>4. 权限使用说明</h2>
+  <ul>
+    <li><code>storage</code> / <code>unlimitedStorage</code>：在本地保存对话与设置。</li>
+    <li><code>sidePanel</code>：展示管理界面。</li>
+    <li><code>activeTab</code> / <code>tabs</code> / <code>scripting</code>：在当前 AI 对话页注入脚本并读取对话。</li>
+    <li><code>downloads</code> / <code>clipboardWrite</code>：导出文件与复制内容。</li>
+    <li><strong>主机权限</strong>（豆包 / 千问 / DeepSeek / 元宝 / Kimi 相关域名）：仅用于在对应站点读取对话并完成保存，不作无关站点追踪。</li>
+  </ul>
+
+  <h2>5. 第三方服务</h2>
+  <p>您使用各 AI 平台本身的服务时，适用各平台自己的隐私政策。本扩展不会代替这些平台处理其账户体系；保存的是您在本机浏览器中可见并可导出的对话副本。</p>
+
+  <h2>6. 数据共享与出售</h2>
+  <p>我们不会出售您的对话数据。除法律要求外，不会向第三方共享您的本地对话内容。</p>
+
+  <h2>7. 数据删除</h2>
+  <ul>
+    <li>可在扩展内删除单条对话或清空相关数据。</li>
+    <li>卸载扩展后，浏览器通常会清除该扩展的本地存储（以浏览器实际行为为准）。</li>
+    <li>建议定期导出 JSON 备份到您自己的设备。</li>
+  </ul>
+
+  <h2>8. 儿童隐私</h2>
+  <p>本扩展面向一般用户的效率工具，不以儿童为主要服务对象。</p>
+
+  <h2>9. 政策变更</h2>
+  <p>若后续增加云同步等会改变数据处理方式的功能，我们将更新本政策，并在产品说明或商店页面提示。</p>
+
+  <h2>10. 联系方式</h2>
+  <p>如有隐私相关问题，请通过 GitHub 仓库 Issues 联系：</p>
+  <p><a href="https://github.com/SantoCc/ai-chat-manager">https://github.com/SantoCc/ai-chat-manager</a></p>
+</body>
+</html>
