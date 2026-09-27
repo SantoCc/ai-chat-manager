@@ -18,11 +18,12 @@ Microsoft Edge 扩展（Manifest V3）：把豆包、通义千问、DeepSeek、�
 
 更完整的一屏说明（含截图）：https://santocc.github.io/ai-chat-manager/
 
-### 方式 B：开发者模式（给开发 / 尝鲜）
+### 方式 B：Chrome / 开发者模式（未上架 Chrome 商店）
 
 1. 克隆本仓库
-2. Edge 打开 `edge://extensions/` → 开启「开发人员模式」
-3. 「加载解压缩的扩展」→ 选择本仓库根目录（含 `manifest.json`）
+2. Chrome 打开 `chrome://extensions/`（或 Edge 打开 `edge://extensions/`）→ 开启「开发者模式」
+3. 「加载已解压的扩展程序」→ 选择本仓库根目录（含 `manifest.json`）
+4. 国内一般无法从 Chrome 网上应用店安装本扩展，请用本方式
 4. 访问支持的 AI 站点，用侧栏保存对话
 
 若缺少图标，可先进入 `icons/` 运行 `generate-icons.ps1`，或打开 `icons/generate-icons.html` 生成。

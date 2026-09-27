@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="AI对话管理器：把豆包、通义千问、DeepSeek、元宝、Kimi 的对话统一存到 Edge 侧栏，本地保存、可搜索可导出。" />
-  <title>AI对话管理器 · Edge 扩展</title>
+  <meta name="description" content="AI对话管理器：把豆包、通义千问、DeepSeek、元宝、Kimi 的对话统一存到浏览器侧栏。Edge 商店一键装；Chrome 可加载本仓库文件夹使用。本地保存、可搜索可导出。" />
+  <title>AI对话管理器 · Edge / Chrome 扩展</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -44,7 +44,7 @@
       display: grid;
       grid-template-columns: 1.05fr .95fr;
       gap: 28px;
-      align-items: center;
+      align-items: start;
     }
     @media (max-width: 820px) {
       .hero { grid-template-columns: 1fr; }
@@ -75,30 +75,51 @@
       padding: 4px 10px;
       border-radius: 999px;
     }
+    .install-grid {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
     .steps {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 14px;
       padding: 16px 18px;
-      margin-bottom: 20px;
     }
     .steps h2 {
-      margin: 0 0 12px;
-      font-size: .95rem;
-      color: var(--muted);
-      font-weight: 600;
+      margin: 0 0 4px;
+      font-size: 1rem;
+      color: var(--text);
+      font-weight: 650;
     }
+    .steps .tag {
+      display: inline-block;
+      font-size: .75rem;
+      color: var(--ok);
+      margin-bottom: 10px;
+    }
+    .steps .tag.warn { color: #e6b35a; }
     .steps ol {
       margin: 0;
       padding-left: 1.2em;
       line-height: 1.75;
+      color: var(--muted);
     }
-    .steps strong { color: var(--ok); font-weight: 700; }
+    .steps li { margin-bottom: 2px; }
+    .steps strong { color: var(--text); font-weight: 700; }
+    .steps code {
+      font-size: .85em;
+      color: var(--accent);
+      background: rgba(61,156,240,.12);
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
     .cta {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
       align-items: center;
+      margin-bottom: 8px;
     }
     .btn {
       display: inline-flex;
@@ -123,9 +144,10 @@
     }
     .btn-ghost:hover { border-color: var(--muted); }
     .note {
-      margin-top: 10px;
+      margin: 8px 0 0;
       font-size: .85rem;
       color: var(--muted);
+      line-height: 1.55;
     }
     .shots {
       display: grid;
@@ -169,26 +191,41 @@
 
     <section class="hero">
       <div>
-        <h1>多个 AI 的对话，统一存进 Edge 侧栏</h1>
-        <p class="lead">手滑刷新、来回切换豆包 / 千问 / DeepSeek……对话不再散落各站。本地保存，可搜索、可导出，不上传到开发者服务器。</p>
+        <h1>多个 AI 的对话，统一存进浏览器侧栏</h1>
+        <p class="lead">手滑刷新、来回切换豆包 / 千问 / DeepSeek……对话不再散落各站。本地保存，可搜索、可导出，不上传到开发者服务器。支持 <strong style="color:var(--text)">Edge</strong>（商店安装）与 <strong style="color:var(--text)">Chrome</strong>（加载扩展文件夹）。</p>
         <div class="platforms">
           <span>豆包</span><span>通义千问</span><span>DeepSeek</span><span>腾讯元宝</span><span>Kimi</span>
+          <span>Edge</span><span>Chrome</span>
         </div>
 
-        <div class="steps">
-          <h2>3 步安装（约 1 分钟）</h2>
-          <ol>
-            <li>打开 <strong>Microsoft Edge</strong></li>
-            <li>进入扩展商店（或点下方按钮）</li>
-            <li>搜索 <strong>AI对话管理器</strong> → 获取</li>
-          </ol>
+        <div class="install-grid">
+          <div class="steps">
+            <h2>Edge：商店安装（推荐）</h2>
+            <div class="tag">约 1 分钟 · 正式上架</div>
+            <ol>
+              <li>打开 <strong>Microsoft Edge</strong></li>
+              <li>进入扩展商店（或点下方按钮）</li>
+              <li>搜索 <strong>AI对话管理器</strong> → 获取</li>
+            </ol>
+          </div>
+
+          <div class="steps">
+            <h2>Chrome：加载扩展文件夹</h2>
+            <div class="tag warn">未上架 Chrome 商店 · 国内也难访问商店</div>
+            <ol>
+              <li>打开仓库下载代码：<a href="https://github.com/SantoCc/ai-chat-manager" style="color:var(--accent)">GitHub · ai-chat-manager</a>（Code → Download ZIP，解压）</li>
+              <li>Chrome 打开 <code>chrome://extensions/</code>，开启右上角「开发者模式」</li>
+              <li>点「加载已解压的扩展程序」，选择解压后的项目根目录（内含 <code>manifest.json</code>）</li>
+              <li>打开豆包 / 千问 / DeepSeek 等对话页 → 点扩展图标打开侧栏 → 保存</li>
+            </ol>
+          </div>
         </div>
 
         <div class="cta">
           <a class="btn btn-primary" href="https://microsoftedge.microsoft.com/addons/detail/jfhbkeaapcnbjiicekkkleinfnjkpjoj" rel="noopener">Edge 商店安装</a>
-          <a class="btn btn-ghost" href="https://github.com/SantoCc/ai-chat-manager" rel="noopener">GitHub</a>
+          <a class="btn btn-ghost" href="https://github.com/SantoCc/ai-chat-manager" rel="noopener">Chrome：去 GitHub 下载</a>
         </div>
-        <p class="note">若商店搜不到：请开发者在 Partner Center 确认 Availability 为 Public（Hidden/下架会 404）。小红书/微信只写搜店名即可。</p>
+        <p class="note">小红书 / 微信等渠道：Edge 用户写搜「AI对话管理器」；Chrome 用户写「GitHub 搜 SantoCc/ai-chat-manager，开发者模式加载文件夹」。</p>
       </div>
 
       <div class="shots">
@@ -201,9 +238,9 @@
     </section>
 
     <footer>
-      <span>本地优先 · 隐私友好</span>
+      <span>本地优先 · 隐私友好 · Edge / Chrome</span>
       <a href="privacy.html">隐私政策</a>
-      <a href="https://github.com/SantoCc/ai-chat-manager/issues">反馈问题</a>
+      <a href="https://github.com/SantoCc/ai-chat-manager/issues/new?template=feedback.yml">体验反馈</a>
     </footer>
   </div>
 </body>
