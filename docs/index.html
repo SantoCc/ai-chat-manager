@@ -1,13 +1,210 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="refresh" content="0; url=privacy.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI对话管理器</title>
-  <link rel="canonical" href="privacy.html" />
+  <meta name="description" content="AI对话管理器：把豆包、通义千问、DeepSeek、元宝、Kimi 的对话统一存到 Edge 侧栏，本地保存、可搜索可导出。" />
+  <title>AI对话管理器 · Edge 扩展</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --text: #eef2f6;
+      --muted: #9aa7b5;
+      --accent: #3d9cf0;
+      --accent-hover: #5aadf5;
+      --line: #2a3542;
+      --ok: #3ecf8e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(900px 420px at 12% -10%, rgba(61,156,240,.22), transparent 55%),
+        radial-gradient(700px 380px at 90% 0%, rgba(62,207,142,.12), transparent 50%),
+        var(--bg);
+    }
+    .wrap {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    header img { width: 40px; height: 40px; border-radius: 10px; }
+    header .brand { font-weight: 700; font-size: 1.05rem; letter-spacing: .02em; }
+    .hero {
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 28px;
+      align-items: center;
+    }
+    @media (max-width: 820px) {
+      .hero { grid-template-columns: 1fr; }
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+      line-height: 1.25;
+    }
+    .lead {
+      margin: 0 0 22px;
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.65;
+      max-width: 36em;
+    }
+    .platforms {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+    .platforms span {
+      font-size: .82rem;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.03);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .steps {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 20px;
+    }
+    .steps h2 {
+      margin: 0 0 12px;
+      font-size: .95rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .steps ol {
+      margin: 0;
+      padding-left: 1.2em;
+      line-height: 1.75;
+    }
+    .steps strong { color: var(--ok); font-weight: 700; }
+    .cta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-weight: 650;
+      text-decoration: none;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #061018;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--line);
+    }
+    .btn-ghost:hover { border-color: var(--muted); }
+    .note {
+      margin-top: 10px;
+      font-size: .85rem;
+      color: var(--muted);
+    }
+    .shots {
+      display: grid;
+      gap: 10px;
+    }
+    .shots img {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #000;
+      display: block;
+    }
+    .shots .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (max-width: 520px) {
+      .shots .row { grid-template-columns: 1fr; }
+    }
+    footer {
+      margin-top: 28px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: .85rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
 </head>
 <body>
-  <p>正在跳转到 <a href="privacy.html">隐私政策</a>…</p>
+  <div class="wrap">
+    <header>
+      <img src="assets/icon.png" alt="AI对话管理器" width="40" height="40" />
+      <div class="brand">AI对话管理器</div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <h1>多个 AI 的对话，统一存进 Edge 侧栏</h1>
+        <p class="lead">手滑刷新、来回切换豆包 / 千问 / DeepSeek……对话不再散落各站。本地保存，可搜索、可导出，不上传到开发者服务器。</p>
+        <div class="platforms">
+          <span>豆包</span><span>通义千问</span><span>DeepSeek</span><span>腾讯元宝</span><span>Kimi</span>
+        </div>
+
+        <div class="steps">
+          <h2>3 步安装（约 1 分钟）</h2>
+          <ol>
+            <li>打开 <strong>Microsoft Edge</strong></li>
+            <li>进入扩展商店（或点下方按钮）</li>
+            <li>搜索 <strong>AI对话管理器</strong> → 获取</li>
+          </ol>
+        </div>
+
+        <div class="cta">
+          <a class="btn btn-primary" href="https://microsoftedge.microsoft.com/addons/detail/jfhbkeaapcnbjiicekkleinfnjkpjoj" rel="noopener">Edge 商店安装</a>
+          <a class="btn btn-ghost" href="https://github.com/SantoCc/ai-chat-manager" rel="noopener">GitHub</a>
+        </div>
+        <p class="note">小红书 / 微信等渠道：请直接在 Edge 商店搜索「AI对话管理器」，无需外链。</p>
+      </div>
+
+      <div class="shots">
+        <img src="assets/01-list.png" alt="侧栏对话列表" />
+        <div class="row">
+          <img src="assets/02-detail.png" alt="对话详情" />
+          <img src="assets/04-search.png" alt="本地搜索" />
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <span>本地优先 · 隐私友好</span>
+      <a href="privacy.html">隐私政策</a>
+      <a href="https://github.com/SantoCc/ai-chat-manager/issues">反馈问题</a>
+    </footer>
+  </div>
 </body>
 </html>
