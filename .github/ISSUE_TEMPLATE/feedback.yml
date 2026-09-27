@@ -1,0 +1,78 @@
+﻿name: 体验反馈
+description: 试用 Edge 扩展后的安装问题、卡点或功能建议（获客攻坚用）
+title: "[体验] "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢试用 **AI对话管理器**。请尽量填完整，方便我按反馈改。
+        商店页：https://microsoftedge.microsoft.com/addons/detail/jfhbkeaapcnbjiicekkkleinfnjkpjoj
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: 你怎么安装的？
+      options:
+        - Edge 扩展商店
+        - 开发者模式加载本仓库
+        - 还没装上（卡在安装）
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: 你平时主要用哪些 AI？（可多选）
+      multiple: true
+      options:
+        - 豆包
+        - 通义千问
+        - DeepSeek
+        - 腾讯元宝
+        - Kimi
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: first_feature
+    attributes:
+      label: 装上后最先用了哪个功能？
+      options:
+        - 保存当前对话
+        - 自动保存
+        - 列表 / 文件夹
+        - 搜索
+        - 导出
+        - 还没成功用上
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: blocker
+    attributes:
+      label: 卡在哪 / 最缺什么？
+      description: 越具体越好（页面、按钮、报错原文、期望行为）
+      placeholder: 例如：千问保存后侧栏是空的；搜索「豆包+xxx」查不到……
+    validations:
+      required: true
+  - type: textarea
+    id: without_ext
+    attributes:
+      label: 不用插件时，你怎么找旧对话？
+      placeholder: 例如：各站自带历史、复制到备忘录、基本不找……
+    validations:
+      required: false
+  - type: input
+    id: env
+    attributes:
+      label: 环境（可选）
+      placeholder: Edge 版本 / 系统，例如 Edge 129 · Windows 10
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他想说的
+      placeholder: 截图可直接拖进评论区
+    validations:
+      required: false

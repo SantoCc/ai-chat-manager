@@ -1,41 +1,55 @@
-# AI对话管理器
+﻿# AI对话管理器
 
-Microsoft Edge 浏览器扩展（Manifest V3），用于统一管理国内 5 大 AI 对话平台的历史对话。
+Microsoft Edge 扩展（Manifest V3）：把豆包、通义千问、DeepSeek、腾讯元宝、Kimi 的对话统一保存到侧栏，支持整理、搜索、导出。数据默认只存在本机。
+
+**商店安装（推荐）** · [落地页](https://santocc.github.io/ai-chat-manager/) · [隐私政策](https://santocc.github.io/ai-chat-manager/privacy.html) · [提交体验反馈](https://github.com/SantoCc/ai-chat-manager/issues/new?template=feedback.yml)
+
+---
+
+## 安装
+
+### 方式 A：Edge 扩展商店（给使用者）
+
+1. 打开 [Microsoft Edge Add-ons · AI对话管理器](https://microsoftedge.microsoft.com/addons/detail/jfhbkeaapcnbjiicekkkleinfnjkpjoj)
+2. 点击 **获取**
+3. 在任意支持的 AI 站点打开对话 → 点扩展图标打开侧栏 → 保存
+
+也可在 Edge 商店搜索：**AI对话管理器**。
+
+更完整的一屏说明（含截图）：https://santocc.github.io/ai-chat-manager/
+
+### 方式 B：开发者模式（给开发 / 尝鲜）
+
+1. 克隆本仓库
+2. Edge 打开 `edge://extensions/` → 开启「开发人员模式」
+3. 「加载解压缩的扩展」→ 选择本仓库根目录（含 `manifest.json`）
+4. 访问支持的 AI 站点，用侧栏保存对话
+
+若缺少图标，可先进入 `icons/` 运行 `generate-icons.ps1`，或打开 `icons/generate-icons.html` 生成。
+
+---
 
 ## 支持平台
 
 | 平台 | 状态 |
 |------|------|
-| DeepSeek | ✅ 官方 API（content script，无页面 Hook） |
-| 豆包 | ✅ data-testid 结构化提取 |
-| 通义千问 | ✅ Web API（content script，无页面 Hook） |
-| 腾讯元宝 | 🔧 基础适配器 |
-| Kimi | 🔧 基础适配器 |
+| DeepSeek | ✅ |
+| 豆包 | ✅ |
+| 通义千问 | ✅ |
+| 腾讯元宝 | 🔧 基础适配 |
+| Kimi | 🔧 基础适配 |
 
-## 安装（开发者模式）
+---
 
-### 1. 生成图标
+## 体验反馈
 
-```powershell
-cd icons
-.\generate-icons.ps1
-```
+装上后卡在哪、缺什么功能，请用模板开 Issue（比私信更好追踪）：
 
-或在浏览器中打开 `icons/generate-icons.html`，点击下载全部图标。
+→ [填写体验反馈](https://github.com/SantoCc/ai-chat-manager/issues/new?template=feedback.yml)
 
-### 2. 加载扩展到 Edge
+也可直接评论相关帖子 / 私信，但 Issue 优先。
 
-1. 打开 Edge，访问 `edge://extensions/`
-2. 开启左下角「开发人员模式」
-3. 点击「加载解压缩的扩展」
-4. 选择 `ai-chat-manager` 文件夹
-
-### 3. 使用
-
-1. 访问 [DeepSeek Chat](https://chat.deepseek.com/) 并完成一段对话
-2. 点击扩展图标打开侧边栏
-3. 点击「💾 保存本轮」保存对话
-4. 在列表中点击对话查看详情、复制或删除
+---
 
 ## 项目结构
 
@@ -44,19 +58,22 @@ ai-chat-manager/
 ├── manifest.json          # MV3 配置
 ├── background/            # Service Worker
 ├── content/               # Content Scripts + 平台适配器
-├── sidepanel/             # 侧边栏 UI
+├── sidepanel/             # 侧栏 UI
 ├── lib/                   # 存储、Markdown、导出
 ├── utils/                 # 工具函数
+├── docs/                  # GitHub Pages（落地页 / 隐私政策）
+├── _locales/              # 商店多语言
 └── icons/                 # 扩展图标
 ```
 
-## 开发阶段
-
-- **P0**: 框架 + DeepSeek API
-- **P1 (当前)**: 豆包 + 通义千问正式接入
-- **P2**: 元宝 / Kimi + 导出增强
-- **P3**: 飞书 API + 跨设备同步
+---
 
 ## 隐私
 
-所有数据存储在本地 `chrome.storage.local`，不会上传到任何服务器。
+对话内容默认保存在浏览器本地（`chrome.storage.local`），不上传到开发者自建服务器。详见 [隐私政策](https://santocc.github.io/ai-chat-manager/privacy.html)。
+
+---
+
+## License
+
+见 [LICENSE](./LICENSE)。
